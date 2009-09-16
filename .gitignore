@@ -1,7 +1,8 @@
 #
 # Kbuild ignores
 #
-.*
+#.* <= Don't ignore .config for now until we figure out how
+#      to define a moxie specific config. Maybe under arch dir?
 *.o
 *.o.*
 *.a

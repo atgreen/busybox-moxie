@@ -289,7 +289,7 @@ MAKEFLAGS += -rR
 # Make variables (CC, etc...)
 
 AS		= $(CROSS_COMPILE)as
-CC		= $(CROSS_COMPILE)gcc
+CC		= $(CROSS_COMPILE)gcc -fno-rerun-cse-after-loop
 LD		= $(CC) -nostdlib
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar
