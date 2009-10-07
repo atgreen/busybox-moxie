@@ -193,6 +193,7 @@ struct globals_misc {
 	/* indicates specified signal received */
 	uint8_t gotsig[NSIG - 1]; /* offset by 1: "signal" 0 is meaningless */
 	char *trap[NSIG];
+	char **trap_ptr;        /* used only by "trap hack" */
 
 	/* Rarely referenced stuff */
 #if ENABLE_ASH_RANDOM_SUPPORT
@@ -222,6 +223,7 @@ extern struct globals_misc *const ash_ptr_to_globals_misc;
 #define sigmode     (G_misc.sigmode    )
 #define gotsig      (G_misc.gotsig     )
 #define trap        (G_misc.trap       )
+#define trap_ptr    (G_misc.trap_ptr   )
 #define random_galois_LFSR (G_misc.random_galois_LFSR)
 #define random_LCG         (G_misc.random_LCG        )
 #define backgndpid  (G_misc.backgndpid )
@@ -231,6 +233,7 @@ extern struct globals_misc *const ash_ptr_to_globals_misc;
 	barrier(); \
 	curdir = nullstr; \
 	physdir = nullstr; \
+	trap_ptr = trap; \
 } while (0)
 
 
@@ -2700,8 +2703,8 @@ SIT(int c, int syntax)
 	} else
 #endif
 	{
-		if ((unsigned char)c >= (unsigned char)(CTLESC)
-		 && (unsigned char)c <= (unsigned char)(CTLQUOTEMARK)
+		if ((unsigned char)c >= CTLESC
+		 && (unsigned char)c <= CTLQUOTEMARK
 		) {
 			return CCTL;
 		}
@@ -4523,9 +4526,11 @@ clear_traps(void)
 	for (tp = trap; tp < &trap[NSIG]; tp++) {
 		if (*tp && **tp) {      /* trap not NULL or "" (SIG_IGN) */
 			INT_OFF;
-			free(*tp);
+			if (trap_ptr == trap)
+				free(*tp);
+			/* else: it "belongs" to trap_ptr vector, don't free */
 			*tp = NULL;
-			if (tp != &trap[0])
+			if ((tp - trap) != 0)
 				setsignal(tp - trap);
 			INT_ON;
 		}
@@ -4539,7 +4544,7 @@ static void closescript(void);
 #if !JOBS
 # define forkchild(jp, n, mode) forkchild(jp, mode)
 #endif
-static void
+static NOINLINE void
 forkchild(struct job *jp, union node *n, int mode)
 {
 	int oldlvl;
@@ -4553,6 +4558,53 @@ forkchild(struct job *jp, union node *n, int mode)
 	 * Do we do it correctly? */
 
 	closescript();
+
+	if (mode == FORK_NOJOB          /* is it `xxx` ? */
+	 && n && n->type == NCMD        /* is it single cmd? */
+	/* && n->ncmd.args->type == NARG - always true? */
+	 && strcmp(n->ncmd.args->narg.text, "trap") == 0
+	 && n->ncmd.args->narg.next == NULL /* "trap" with no arguments */
+	/* && n->ncmd.args->narg.backquote == NULL - do we need to check this? */
+	) {
+		TRACE(("Trap hack\n"));
+		/* Awful hack for `trap` or $(trap).
+		 *
+		 * http://www.opengroup.org/onlinepubs/009695399/utilities/trap.html
+		 * contains an example where "trap" is executed in a subshell:
+		 *
+		 * save_traps=$(trap)
+		 * ...
+		 * eval "$save_traps"
+		 *
+		 * Standard does not say that "trap" in subshell shall print
+		 * parent shell's traps. It only says that its output
+		 * must have suitable form, but then, in the above example
+		 * (which is not supposed to be normative), it implies that.
+		 *
+		 * bash (and probably other shell) does implement it
+		 * (traps are reset to defaults, but "trap" still shows them),
+		 * but as a result, "trap" logic is hopelessly messed up:
+		 *
+		 * # trap
+		 * trap -- 'echo Ho' SIGWINCH  <--- we have a handler
+		 * # (trap)        <--- trap is in subshell - no output (correct, traps are reset)
+		 * # true | trap   <--- trap is in subshell - no output (ditto)
+		 * # echo `true | trap`    <--- in subshell - output (but traps are reset!)
+		 * trap -- 'echo Ho' SIGWINCH
+		 * # echo `(trap)`         <--- in subshell in subshell - output
+		 * trap -- 'echo Ho' SIGWINCH
+		 * # echo `true | (trap)`  <--- in subshell in subshell in subshell - output!
+		 * trap -- 'echo Ho' SIGWINCH
+		 *
+		 * The rules when to forget and when to not forget traps
+		 * get really complex and nonsensical.
+		 *
+		 * Our solution: ONLY bare $(trap) or `trap` is special.
+		 */
+		/* Save trap handler strings for trap builtin to print */
+		trap_ptr = memcpy(xmalloc(sizeof(trap)), trap, sizeof(trap));
+		/* Fall through into clearing traps */
+	}
 	clear_traps();
 #if JOBS
 	/* do job control only in root shell */
@@ -4597,8 +4649,14 @@ forkchild(struct job *jp, union node *n, int mode)
 		setsignal(SIGQUIT);
 	}
 #if JOBS
-	if (n && n->type == NCMD && strcmp(n->ncmd.args->narg.text, "jobs") == 0) {
+	if (n && n->type == NCMD
+	 && strcmp(n->ncmd.args->narg.text, "jobs") == 0
+	) {
 		TRACE(("Job hack\n"));
+		/* "jobs": we do not want to clear job list for it,
+		 * instead we remove only _its_ own_ job from job list.
+		 * This makes "jobs .... | cat" more useful.
+		 */
 		freejob(curjob);
 		return;
 	}
@@ -4991,7 +5049,7 @@ struct redirtab {
 	struct redirtab *next;
 	int nullredirs;
 	int pair_count;
-	struct two_fd_t two_fd[0];
+	struct two_fd_t two_fd[];
 };
 #define redirlist (G_var.redirlist)
 
@@ -5302,7 +5360,7 @@ ash_arith(const char *s)
 #define EXP_WORD        0x80    /* expand word in parameter expansion */
 #define EXP_QWORD       0x100   /* expand word in quoted parameter expansion */
 /*
- * _rmescape() flags
+ * rmescape() flags
  */
 #define RMESCAPE_ALLOC  0x1     /* Allocate a new string */
 #define RMESCAPE_GLOB   0x2     /* Add backslashes for glob */
@@ -5356,7 +5414,7 @@ esclen(const char *start, const char *p)
 {
 	size_t esc = 0;
 
-	while (p > start && *--p == CTLESC) {
+	while (p > start && (unsigned char)*--p == CTLESC) {
 		esc++;
 	}
 	return esc;
@@ -5372,13 +5430,13 @@ rmescapes(char *str, int flag)
 
 	char *p, *q, *r;
 	unsigned inquotes;
-	int notescaped;
-	int globbing;
+	unsigned protect_against_glob;
+	unsigned globbing;
 
 	p = strpbrk(str, qchars);
-	if (!p) {
+	if (!p)
 		return str;
-	}
+
 	q = p;
 	r = str;
 	if (flag & RMESCAPE_ALLOC) {
@@ -5397,28 +5455,33 @@ rmescapes(char *str, int flag)
 			q = (char *)memcpy(q, str, len) + len;
 		}
 	}
+
 	inquotes = (flag & RMESCAPE_QUOTED) ^ RMESCAPE_QUOTED;
 	globbing = flag & RMESCAPE_GLOB;
-	notescaped = globbing;
+	protect_against_glob = globbing;
 	while (*p) {
 		if (*p == CTLQUOTEMARK) {
+// TODO: if no RMESCAPE_QUOTED in flags, inquotes never becomes 0
+// (alternates between RMESCAPE_QUOTED and ~RMESCAPE_QUOTED). Is it ok?
+// Note: both inquotes and protect_against_glob only affect whether
+// CTLESC,<ch> gets converted to <ch> or to \<ch>
 			inquotes = ~inquotes;
 			p++;
-			notescaped = globbing;
+			protect_against_glob = globbing;
 			continue;
 		}
 		if (*p == '\\') {
 			/* naked back slash */
-			notescaped = 0;
+			protect_against_glob = 0;
 			goto copy;
 		}
 		if (*p == CTLESC) {
 			p++;
-			if (notescaped && inquotes && *p != '/') {
+			if (protect_against_glob && inquotes && *p != '/') {
 				*q++ = '\\';
 			}
 		}
-		notescaped = globbing;
+		protect_against_glob = globbing;
  copy:
 		*q++ = *p++;
 	}
@@ -5541,13 +5604,13 @@ removerecordregions(int endoff)
 }
 
 static char *
-exptilde(char *startp, char *p, int flag)
+exptilde(char *startp, char *p, int flags)
 {
 	char c;
 	char *name;
 	struct passwd *pw;
 	const char *home;
-	int quotes = flag & (EXP_FULL | EXP_CASE);
+	int quotes = flags & (EXP_FULL | EXP_CASE | EXP_REDIR);
 	int startloc;
 
 	name = p + 1;
@@ -5559,7 +5622,7 @@ exptilde(char *startp, char *p, int flag)
 		case CTLQUOTEMARK:
 			return startp;
 		case ':':
-			if (flag & EXP_VARTILDE)
+			if (flags & EXP_VARTILDE)
 				goto done;
 			break;
 		case '/':
@@ -5774,7 +5837,7 @@ expari(int quotes)
 #endif
 
 /* argstr needs it */
-static char *evalvar(char *p, int flag, struct strlist *var_str_list);
+static char *evalvar(char *p, int flags, struct strlist *var_str_list);
 
 /*
  * Perform variable and command substitution.  If EXP_FULL is set, output CTLESC
@@ -5786,7 +5849,7 @@ static char *evalvar(char *p, int flag, struct strlist *var_str_list);
  * for correct expansion of "B=$A" word.
  */
 static void
-argstr(char *p, int flag, struct strlist *var_str_list)
+argstr(char *p, int flags, struct strlist *var_str_list)
 {
 	static const char spclchars[] ALIGN1 = {
 		'=',
@@ -5804,42 +5867,44 @@ argstr(char *p, int flag, struct strlist *var_str_list)
 	};
 	const char *reject = spclchars;
 	int c;
-	int quotes = flag & (EXP_FULL | EXP_CASE | EXP_REDIR); /* do CTLESC */
-	int breakall = flag & EXP_WORD;
+	int quotes = flags & (EXP_FULL | EXP_CASE | EXP_REDIR); /* do CTLESC */
+	int breakall = flags & EXP_WORD;
 	int inquotes;
 	size_t length;
 	int startloc;
 
-	if (!(flag & EXP_VARTILDE)) {
+	if (!(flags & EXP_VARTILDE)) {
 		reject += 2;
-	} else if (flag & EXP_VARTILDE2) {
+	} else if (flags & EXP_VARTILDE2) {
 		reject++;
 	}
 	inquotes = 0;
 	length = 0;
-	if (flag & EXP_TILDE) {
+	if (flags & EXP_TILDE) {
 		char *q;
 
-		flag &= ~EXP_TILDE;
+		flags &= ~EXP_TILDE;
  tilde:
 		q = p;
-		if (*q == CTLESC && (flag & EXP_QWORD))
+		if (*q == CTLESC && (flags & EXP_QWORD))
 			q++;
 		if (*q == '~')
-			p = exptilde(p, q, flag);
+			p = exptilde(p, q, flags);
 	}
  start:
 	startloc = expdest - (char *)stackblock();
 	for (;;) {
 		length += strcspn(p + length, reject);
-		c = p[length];
-		if (c && (!(c & 0x80)
+		c = (unsigned char) p[length];
+		if (c) {
+			if (!(c & 0x80)
 #if ENABLE_SH_MATH_SUPPORT
-					|| c == CTLENDARI
+			 || c == CTLENDARI
 #endif
-		   )) {
-			/* c == '=' || c == ':' || c == CTLENDARI */
-			length++;
+			) {
+				/* c == '=' || c == ':' || c == CTLENDARI */
+				length++;
+			}
 		}
 		if (length > 0) {
 			int newloc;
@@ -5857,11 +5922,11 @@ argstr(char *p, int flag, struct strlist *var_str_list)
 		case '\0':
 			goto breakloop;
 		case '=':
-			if (flag & EXP_VARTILDE2) {
+			if (flags & EXP_VARTILDE2) {
 				p--;
 				continue;
 			}
-			flag |= EXP_VARTILDE2;
+			flags |= EXP_VARTILDE2;
 			reject++;
 			/* fall through */
 		case ':':
@@ -5880,15 +5945,13 @@ argstr(char *p, int flag, struct strlist *var_str_list)
 			goto breakloop;
 		case CTLQUOTEMARK:
 			/* "$@" syntax adherence hack */
-			if (
-				!inquotes &&
-				!memcmp(p, dolatstr, 4) &&
-				(p[4] == CTLQUOTEMARK || (
-					p[4] == CTLENDVAR &&
-					p[5] == CTLQUOTEMARK
-				))
+			if (!inquotes
+			 && memcmp(p, dolatstr, 4) == 0
+			 && (  p[4] == CTLQUOTEMARK
+			    || (p[4] == CTLENDVAR && p[5] == CTLQUOTEMARK)
+			    )
 			) {
-				p = evalvar(p + 1, flag, /* var_str_list: */ NULL) + 1;
+				p = evalvar(p + 1, flags, /* var_str_list: */ NULL) + 1;
 				goto start;
 			}
 			inquotes = !inquotes;
@@ -5904,10 +5967,10 @@ argstr(char *p, int flag, struct strlist *var_str_list)
 			length++;
 			goto addquote;
 		case CTLVAR:
-			p = evalvar(p, flag, var_str_list);
+			p = evalvar(p, flags, var_str_list);
 			goto start;
 		case CTLBACKQ:
-			c = 0;
+			c = '\0';
 		case CTLBACKQ|CTLQUOTE:
 			expbackq(argbackq->n, c, quotes);
 			argbackq = argbackq->next;
@@ -6308,6 +6371,16 @@ subevalvar(char *p, char *str, int strloc, int subtype,
 
 /*
  * Add the value of a specialized variable to the stack string.
+ * name parameter (examples):
+ * ash -c 'echo $1'      name:'1='
+ * ash -c 'echo $qwe'    name:'qwe='
+ * ash -c 'echo $$'      name:'$='
+ * ash -c 'echo ${$}'    name:'$='
+ * ash -c 'echo ${$##q}' name:'$=q'
+ * ash -c 'echo ${#$}'   name:'$='
+ * note: examples with bad shell syntax:
+ * ash -c 'echo ${#$1}'  name:'$=1'
+ * ash -c 'echo ${#1#}'  name:'1=#'
  */
 static ssize_t
 varvalue(char *name, int varflags, int flags, struct strlist *var_str_list)
@@ -6322,7 +6395,7 @@ varvalue(char *name, int varflags, int flags, struct strlist *var_str_list)
 	int syntax;
 	int quoted = varflags & VSQUOTE;
 	int subtype = varflags & VSTYPE;
-	int quotes = flags & (EXP_FULL | EXP_CASE);
+	int quotes = flags & (EXP_FULL | EXP_CASE | EXP_REDIR);
 
 	if (quoted && (flags & EXP_FULL))
 		sep = 1 << CHAR_BIT;
@@ -6344,7 +6417,7 @@ varvalue(char *name, int varflags, int flags, struct strlist *var_str_list)
 			return -1;
  numvar:
 		len = cvtnum(num);
-		break;
+		goto check_1char_name;
 	case '-':
 		expdest = makestrspace(NOPTS, expdest);
 		for (i = NOPTS - 1; i >= 0; i--) {
@@ -6353,6 +6426,12 @@ varvalue(char *name, int varflags, int flags, struct strlist *var_str_list)
 				len++;
 			}
 		}
+ check_1char_name:
+#if 0
+		/* handles cases similar to ${#$1} */
+		if (name[2] != '\0')
+			raise_error_syntax("bad substitution");
+#endif
 		break;
 	case '@':
 		if (sep)
@@ -6452,7 +6531,7 @@ varvalue(char *name, int varflags, int flags, struct strlist *var_str_list)
  * input string.
  */
 static char *
-evalvar(char *p, int flag, struct strlist *var_str_list)
+evalvar(char *p, int flags, struct strlist *var_str_list)
 {
 	char varflags;
 	char subtype;
@@ -6463,7 +6542,7 @@ evalvar(char *p, int flag, struct strlist *var_str_list)
 	int startloc;
 	ssize_t varlen;
 
-	varflags = *p++;
+	varflags = (unsigned char) *p++;
 	subtype = varflags & VSTYPE;
 	quoted = varflags & VSQUOTE;
 	var = p;
@@ -6472,7 +6551,7 @@ evalvar(char *p, int flag, struct strlist *var_str_list)
 	p = strchr(p, '=') + 1;
 
  again:
-	varlen = varvalue(var, varflags, flag, var_str_list);
+	varlen = varvalue(var, varflags, flags, var_str_list);
 	if (varflags & VSNUL)
 		varlen--;
 
@@ -6485,8 +6564,8 @@ evalvar(char *p, int flag, struct strlist *var_str_list)
  vsplus:
 		if (varlen < 0) {
 			argstr(
-				p, flag | EXP_TILDE |
-					(quoted ?  EXP_QWORD : EXP_WORD),
+				p, flags | EXP_TILDE |
+					(quoted ? EXP_QWORD : EXP_WORD),
 				var_str_list
 			);
 			goto end;
@@ -6558,7 +6637,8 @@ evalvar(char *p, int flag, struct strlist *var_str_list)
 		patloc = expdest - (char *)stackblock();
 		if (0 == subevalvar(p, /* str: */ NULL, patloc, subtype,
 				startloc, varflags,
-				/* quotes: */ flag & (EXP_FULL | EXP_CASE),
+//TODO: | EXP_REDIR too? All other such places do it too
+				/* quotes: */ flags & (EXP_FULL | EXP_CASE),
 				var_str_list)
 		) {
 			int amount = expdest - (
@@ -8475,12 +8555,13 @@ setinteractive(int on)
 		static smallint did_banner;
 
 		if (!did_banner) {
-			out1fmt(
-				"\n\n"
-				"%s built-in shell (ash)\n"
+			/* note: ash and hush share this string */
+			out1fmt("\n\n%s %s\n"
 				"Enter 'help' for a list of built-in commands."
 				"\n\n",
-				bb_banner);
+				bb_banner,
+				"built-in shell (ash)"
+			);
 			did_banner = 1;
 		}
 	}
@@ -10021,7 +10102,7 @@ change_random(const char *value)
 		vrandom.flags &= ~VNOFUNC;
 	} else {
 		/* set/reset */
-		random_galois_LFSR = random_LCG = strtoul(value, (char **)NULL, 10);
+		random_galois_LFSR = random_LCG = strtoul(value, NULL, 10);
 	}
 }
 #endif
@@ -11210,6 +11291,8 @@ parsesub: {
  badsub:
 			raise_error_syntax("bad substitution");
 		}
+		if (c != '}' && subtype == VSLENGTH)
+			goto badsub;
 
 		STPUTC('=', out);
 		flags = 0;
@@ -12201,14 +12284,30 @@ trapcmd(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 	ap = argptr;
 	if (!*ap) {
 		for (signo = 0; signo < NSIG; signo++) {
-			if (trap[signo] != NULL) {
+			char *tr = trap_ptr[signo];
+			if (tr) {
+				/* note: bash adds "SIG", but only if invoked
+				 * as "bash". If called as "sh", or if set -o posix,
+				 * then it prints short signal names.
+				 * We are printing short names: */
 				out1fmt("trap -- %s %s\n",
-						single_quote(trap[signo]),
+						single_quote(tr),
 						get_signame(signo));
+		/* trap_ptr != trap only if we are in special-cased `trap` code.
+		 * In this case, we will exit very soon, no need to free(). */
+				/* if (trap_ptr != trap && tp[0]) */
+				/*	free(tr); */
 			}
 		}
+		/*
+		if (trap_ptr != trap) {
+			free(trap_ptr);
+			trap_ptr = trap;
+		}
+		*/
 		return 0;
 	}
+
 	action = NULL;
 	if (ap[1])
 		action = *ap++;
@@ -12828,8 +12927,7 @@ printlim(enum limtype how, const struct rlimit *limit,
 static int FAST_FUNC
 ulimitcmd(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 {
-	int c;
-	rlim_t val = 0;
+	rlim_t val;
 	enum limtype how = SOFT | HARD;
 	const struct limits *l;
 	int set, all = 0;
@@ -12890,6 +12988,7 @@ ulimitcmd(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 		continue;
 
 	set = *argptr ? 1 : 0;
+	val = 0;
 	if (set) {
 		char *p = *argptr;
 
@@ -12898,15 +12997,13 @@ ulimitcmd(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 		if (strncmp(p, "unlimited\n", 9) == 0)
 			val = RLIM_INFINITY;
 		else {
-			val = (rlim_t) 0;
-
-			while ((c = *p++) >= '0' && c <= '9') {
-				val = (val * 10) + (long)(c - '0');
-				// val is actually 'unsigned long int' and can't get < 0
-				if (val < (rlim_t) 0)
-					break;
-			}
-			if (c)
+			if (sizeof(val) == sizeof(int))
+				val = bb_strtou(p, NULL, 10);
+			else if (sizeof(val) == sizeof(long))
+				val = bb_strtoul(p, NULL, 10);
+			else
+				val = bb_strtoull(p, NULL, 10);
+			if (errno)
 				ash_msg_and_raise_error("bad number");
 			val <<= l->factor_shift;
 		}
@@ -12965,6 +13062,7 @@ exitshell(void)
 	if (p) {
 		trap[0] = NULL;
 		evalstring(p, 0);
+		free(p);
 	}
 	flush_stdout_stderr();
  out:
@@ -12985,7 +13083,6 @@ init(void)
 	/* from var.c: */
 	{
 		char **envp;
-		char ppid[sizeof(int)*3 + 2];
 		const char *p;
 		struct stat st1, st2;
 
@@ -12996,8 +13093,7 @@ init(void)
 			}
 		}
 
-		sprintf(ppid, "%u", (unsigned) getppid());
-		setvar("PPID", ppid, 0);
+		setvar("PPID", utoa(getppid()), 0);
 
 		p = lookupvar("PWD");
 		if (p)
@@ -13236,7 +13332,7 @@ int ash_main(int argc UNUSED_PARAM, char **argv)
 	}
 
 	if (sflag || minusc == NULL) {
-#if ENABLE_FEATURE_EDITING_SAVEHISTORY
+#if MAX_HISTORY > 0 && ENABLE_FEATURE_EDITING_SAVEHISTORY
 		if (iflag) {
 			const char *hp = lookupvar("HISTFILE");
 			if (hp)

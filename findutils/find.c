@@ -62,10 +62,7 @@
 /* This is a NOEXEC applet. Be very careful! */
 
 
-IF_FEATURE_FIND_XDEV(static dev_t *xdev_dev;)
-IF_FEATURE_FIND_XDEV(static int xdev_count;)
-
-typedef int (*action_fp)(const char *fileName, struct stat *statbuf, void *) FAST_FUNC;
+typedef int (*action_fp)(const char *fileName, const struct stat *statbuf, void *) FAST_FUNC;
 
 typedef struct {
 	action_fp f;
@@ -74,10 +71,10 @@ typedef struct {
 #endif
 } action;
 
-#define ACTS(name, arg...) typedef struct { action a; arg; } action_##name;
+#define ACTS(name, ...) typedef struct { action a; __VA_ARGS__ } action_##name;
 #define ACTF(name) \
 	static int FAST_FUNC func_##name(const char *fileName UNUSED_PARAM, \
-		struct stat *statbuf UNUSED_PARAM, \
+		const struct stat *statbuf UNUSED_PARAM, \
 		action_##name* ap UNUSED_PARAM)
 
                         ACTS(print)
@@ -100,9 +97,23 @@ IF_FEATURE_FIND_DELETE( ACTS(delete))
 IF_FEATURE_FIND_EXEC(   ACTS(exec,  char **exec_argv; unsigned *subst_count; int exec_argc;))
 IF_FEATURE_FIND_GROUP(  ACTS(group, gid_t gid;))
 
-static action ***actions;
-static bool need_print = 1;
-static int recurse_flags = ACTION_RECURSE;
+struct globals {
+	IF_FEATURE_FIND_XDEV(dev_t *xdev_dev;)
+	IF_FEATURE_FIND_XDEV(int xdev_count;)
+	action ***actions;
+	bool need_print;
+	recurse_flags_t recurse_flags;
+};
+#define G (*(struct globals*)&bb_common_bufsiz1)
+#define INIT_G() do { \
+	struct G_sizecheck { \
+		char G_sizecheck[sizeof(G) > COMMON_BUFSIZE ? -1 : 1]; \
+	}; \
+	/* we have to zero it out because of NOEXEC */ \
+	memset(&G, 0, offsetof(struct globals, need_print)); \
+	G.need_print = 1; \
+	G.recurse_flags = ACTION_RECURSE; \
+} while (0)
 
 #if ENABLE_FEATURE_FIND_EXEC
 static unsigned count_subst(const char *str)
@@ -139,7 +150,7 @@ static char* subst(const char *src, unsigned count, const char* filename)
  * bit 0=1: matched successfully (TRUE)
  */
 
-static int exec_actions(action ***appp, const char *fileName, struct stat *statbuf)
+static int exec_actions(action ***appp, const char *fileName, const struct stat *statbuf)
 {
 	int cur_group;
 	int cur_action;
@@ -367,7 +378,7 @@ ACTF(context)
 	security_context_t con;
 	int rc;
 
-	if (recurse_flags & ACTION_FOLLOWLINKS) {
+	if (G.recurse_flags & ACTION_FOLLOWLINKS) {
 		rc = getfilecon(fileName, &con);
 	} else {
 		rc = lgetfilecon(fileName, &con);
@@ -392,26 +403,34 @@ static int FAST_FUNC fileAction(const char *fileName,
 
 	if (depth < minmaxdepth[0]) return TRUE;
 	if (depth > minmaxdepth[1]) return SKIP;
-#undef minmaxdepth
 #endif
 
 #if ENABLE_FEATURE_FIND_XDEV
-	if (S_ISDIR(statbuf->st_mode) && xdev_count) {
-		for (i = 0; i < xdev_count; i++) {
-			if (xdev_dev[i] == statbuf->st_dev)
-				break;
-		}
-		if (i == xdev_count)
+	if (S_ISDIR(statbuf->st_mode)) {
+		if (G.xdev_count) {
+			for (i = 0; i < G.xdev_count; i++) {
+				if (G.xdev_dev[i] == statbuf->st_dev)
+					goto found;
+			}
 			return SKIP;
+ found: ;
+		}
 	}
 #endif
-	i = exec_actions(actions, fileName, statbuf);
+	i = exec_actions(G.actions, fileName, statbuf);
 	/* Had no explicit -print[0] or -exec? then print */
-	if ((i & TRUE) && need_print)
+	if ((i & TRUE) && G.need_print)
 		puts(fileName);
+
+#if ENABLE_FEATURE_FIND_MAXDEPTH
+	if (S_ISDIR(statbuf->st_mode))
+		if (depth == minmaxdepth[1])
+			return SKIP;
+#endif
 	/* Cannot return 0: our caller, recursive_action(),
 	 * will perror() and skip dirs (if called on dir) */
 	return (i & SKIP) ? SKIP : TRUE;
+#undef minmaxdepth
 }
 
 
@@ -435,7 +454,7 @@ static int find_type(const char *type)
 	else if (*type == 's')
 		mask = S_IFSOCK;
 
-	if (mask == 0 || *(type + 1) != '\0')
+	if (mask == 0 || type[1] != '\0')
 		bb_error_msg_and_die(bb_msg_invalid_arg, type, "-type");
 
 	return mask;
@@ -456,15 +475,15 @@ static const char* plus_minus_num(const char* str)
 static action*** parse_params(char **argv)
 {
 	enum {
-	                         PARM_a         ,
-	                         PARM_o         ,
-	IF_FEATURE_FIND_NOT(	 PARM_char_not  ,)
+	                        PARM_a         ,
+	                        PARM_o         ,
+	IF_FEATURE_FIND_NOT(	PARM_char_not  ,)
 #if ENABLE_DESKTOP
-	                         PARM_and       ,
-	                         PARM_or        ,
+	                        PARM_and       ,
+	                        PARM_or        ,
 	IF_FEATURE_FIND_NOT(    PARM_not       ,)
 #endif
-	                         PARM_print     ,
+	                        PARM_print     ,
 	IF_FEATURE_FIND_PRINT0( PARM_print0    ,)
 	IF_FEATURE_FIND_DEPTH(  PARM_depth     ,)
 	IF_FEATURE_FIND_PRUNE(  PARM_prune     ,)
@@ -472,8 +491,8 @@ static action*** parse_params(char **argv)
 	IF_FEATURE_FIND_EXEC(   PARM_exec      ,)
 	IF_FEATURE_FIND_PAREN(  PARM_char_brace,)
 	/* All options starting from here require argument */
-	                         PARM_name      ,
-	                         PARM_iname     ,
+	                        PARM_name      ,
+	                        PARM_iname     ,
 	IF_FEATURE_FIND_PATH(   PARM_path      ,)
 	IF_FEATURE_FIND_REGEX(  PARM_regex     ,)
 	IF_FEATURE_FIND_TYPE(   PARM_type      ,)
@@ -596,21 +615,21 @@ static action*** parse_params(char **argv)
 
 	/* --- Tests and actions --- */
 		else if (parm == PARM_print) {
-			need_print = 0;
+			G.need_print = 0;
 			/* GNU find ignores '!' here: "find ! -print" */
 			IF_FEATURE_FIND_NOT( invert_flag = 0; )
 			(void) ALLOC_ACTION(print);
 		}
 #if ENABLE_FEATURE_FIND_PRINT0
 		else if (parm == PARM_print0) {
-			need_print = 0;
+			G.need_print = 0;
 			IF_FEATURE_FIND_NOT( invert_flag = 0; )
 			(void) ALLOC_ACTION(print0);
 		}
 #endif
 #if ENABLE_FEATURE_FIND_DEPTH
 		else if (parm == PARM_depth) {
-			recurse_flags |= ACTION_DEPTHFIRST;
+			G.recurse_flags |= ACTION_DEPTHFIRST;
 		}
 #endif
 #if ENABLE_FEATURE_FIND_PRUNE
@@ -621,8 +640,8 @@ static action*** parse_params(char **argv)
 #endif
 #if ENABLE_FEATURE_FIND_DELETE
 		else if (parm == PARM_delete) {
-			need_print = 0;
-			recurse_flags |= ACTION_DEPTHFIRST;
+			G.need_print = 0;
+			G.recurse_flags |= ACTION_DEPTHFIRST;
 			(void) ALLOC_ACTION(delete);
 		}
 #endif
@@ -630,7 +649,7 @@ static action*** parse_params(char **argv)
 		else if (parm == PARM_exec) {
 			int i;
 			action_exec *ap;
-			need_print = 0;
+			G.need_print = 0;
 			IF_FEATURE_FIND_NOT( invert_flag = 0; )
 			ap = ALLOC_ACTION(exec);
 			ap->exec_argv = ++argv; /* first arg after -exec */
@@ -838,6 +857,8 @@ IF_FEATURE_FIND_MAXDEPTH(OPT_MINDEPTH,)
 #define minmaxdepth NULL
 #endif
 
+	INIT_G();
+
 	for (firstopt = 1; firstopt < argc; firstopt++) {
 		if (argv[firstopt][0] == '-')
 			break;
@@ -865,21 +886,21 @@ IF_FEATURE_FIND_MAXDEPTH(OPT_MINDEPTH,)
 	while ((arg = argp[0])) {
 		int opt = index_in_strings(options, arg);
 		if (opt == OPT_FOLLOW) {
-			recurse_flags |= ACTION_FOLLOWLINKS;
+			G.recurse_flags |= ACTION_FOLLOWLINKS | ACTION_DANGLING_OK;
 			argp[0] = (char*)"-a";
 		}
 #if ENABLE_FEATURE_FIND_XDEV
 		if (opt == OPT_XDEV) {
 			struct stat stbuf;
-			if (!xdev_count) {
-				xdev_count = firstopt - 1;
-				xdev_dev = xmalloc(xdev_count * sizeof(dev_t));
+			if (!G.xdev_count) {
+				G.xdev_count = firstopt - 1;
+				G.xdev_dev = xmalloc(G.xdev_count * sizeof(dev_t));
 				for (i = 1; i < firstopt; i++) {
 					/* not xstat(): shouldn't bomb out on
 					 * "find not_exist exist -xdev" */
 					if (stat(argv[i], &stbuf))
 						stbuf.st_dev = -1L;
-					xdev_dev[i-1] = stbuf.st_dev;
+					G.xdev_dev[i-1] = stbuf.st_dev;
 				}
 			}
 			argp[0] = (char*)"-a";
@@ -898,11 +919,11 @@ IF_FEATURE_FIND_MAXDEPTH(OPT_MINDEPTH,)
 		argp++;
 	}
 
-	actions = parse_params(&argv[firstopt]);
+	G.actions = parse_params(&argv[firstopt]);
 
 	for (i = 1; i < firstopt; i++) {
 		if (!recursive_action(argv[i],
-				recurse_flags,  /* flags */
+				G.recurse_flags,/* flags */
 				fileAction,     /* file action */
 				fileAction,     /* dir action */
 #if ENABLE_FEATURE_FIND_MAXDEPTH

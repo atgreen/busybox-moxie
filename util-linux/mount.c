@@ -19,6 +19,9 @@
 #include <mntent.h>
 #include <syslog.h>
 #include <sys/mount.h>
+#ifndef MS_UNION
+# define MS_UNION       (1 << 8)
+#endif
 #ifndef MS_BIND
 # define MS_BIND        (1 << 12)
 #endif
@@ -50,7 +53,9 @@
 #include "libbb.h"
 
 #if ENABLE_FEATURE_MOUNT_LABEL
-#include "volume_id.h"
+# include "volume_id.h"
+#else
+# define resolve_mount_spec(fsname) ((void)0)
 #endif
 
 // Needed for nfs support only
@@ -175,6 +180,7 @@ static const int32_t mount_options[] = {
 		/* "loud"        */ ~MS_SILENT,
 
 		// action flags
+		/* "union"       */ MS_UNION,
 		/* "bind"        */ MS_BIND,
 		/* "move"        */ MS_MOVE,
 		/* "shared"      */ MS_SHARED,
@@ -229,6 +235,7 @@ static const char mount_option_str[] =
 		"loud\0"
 
 		// action flags
+		"union\0"
 		"bind\0"
 		"move\0"
 		"shared\0"
@@ -288,23 +295,6 @@ static int verbose_mount(const char *source, const char *target,
 }
 #else
 #define verbose_mount(...) mount(__VA_ARGS__)
-#endif
-
-#if ENABLE_FEATURE_MOUNT_LABEL
-static void resolve_mount_spec(char **fsname)
-{
-	char *tmp = NULL;
-
-	if (!strncmp(*fsname, "UUID=", 5))
-		tmp = get_devname_from_uuid(*fsname + 5);
-	else if (!strncmp(*fsname, "LABEL=", 6))
-		tmp = get_devname_from_label(*fsname + 6);
-
-	if (tmp)
-		*fsname = tmp;
-}
-#else
-#define resolve_mount_spec(fsname) ((void)0)
 #endif
 
 // Append mount options to string
@@ -448,7 +438,7 @@ static int mount_it_now(struct mntent *mp, long vfsflags, char *filteropts)
 
 		// If mount failed, try
 		// helper program mount.<mnt_type>
-		if (HELPERS_ALLOWED && rc) {
+		if (HELPERS_ALLOWED && rc && mp->mnt_type) {
 			char *args[8];
 			int errno_save = errno;
 			args[0] = xasprintf("mount.%s", mp->mnt_type);

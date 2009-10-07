@@ -36,8 +36,10 @@ struct globals {
 	off_t out_full, out_part, in_full, in_part;
 };
 #define G (*(struct globals*)&bb_common_bufsiz1)
-/* We have to zero it out because of NOEXEC */
-#define INIT_G() memset(&G, 0, sizeof(G))
+#define INIT_G() do { \
+	/* we have to zero it out because of NOEXEC */ \
+	memset(&G, 0, sizeof(G)); \
+} while (0)
 
 
 static void dd_output_status(int UNUSED_PARAM cur_signal)
@@ -286,25 +288,26 @@ int dd_main(int argc UNUSED_PARAM, char **argv)
 	}
 
 	while (!(flags & FLAG_COUNT) || (G.in_full + G.in_part != count)) {
-		if (flags & FLAG_NOERROR) /* Pre-zero the buffer if conv=noerror */
-			memset(ibuf, 0, ibs);
 		n = safe_read(ifd, ibuf, ibs);
 		if (n == 0)
 			break;
 		if (n < 0) {
+			/* "Bad block" */
 			if (!(flags & FLAG_NOERROR))
 				goto die_infile;
-			n = ibs;
 			bb_simple_perror_msg(infile);
-			/* GNU dd with conv=noerror skips over "bad blocks" */
+			/* GNU dd with conv=noerror skips over bad blocks */
 			xlseek(ifd, ibs, SEEK_CUR);
+			/* conv=noerror,sync writes NULs,
+			 * conv=noerror just ignores input bad blocks */
+			n = 0;
 		}
 		if ((size_t)n == ibs)
 			G.in_full++;
 		else {
 			G.in_part++;
 			if (flags & FLAG_SYNC) {
-				memset(ibuf + n, '\0', ibs - n);
+				memset(ibuf + n, 0, ibs - n);
 				n = ibs;
 			}
 		}

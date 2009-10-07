@@ -286,7 +286,9 @@ enum {
 	ACTION_DEPTHFIRST     = (1 << 3),
 	/*ACTION_REVERSE      = (1 << 4), - unused */
 	ACTION_QUIET          = (1 << 5),
+	ACTION_DANGLING_OK    = (1 << 6),
 };
+typedef uint8_t recurse_flags_t;
 extern int recursive_action(const char *fileName, unsigned flags,
 	int FAST_FUNC (*fileAction)(const char *fileName, struct stat* statbuf, void* userData, int depth),
 	int FAST_FUNC (*dirAction)(const char *fileName, struct stat* statbuf, void* userData, int depth),
@@ -628,6 +630,9 @@ extern ssize_t full_write(int fd, const void *buf, size_t count) FAST_FUNC;
 extern void xwrite(int fd, const void *buf, size_t count) FAST_FUNC;
 extern void xwrite_str(int fd, const char *str) FAST_FUNC;
 extern void xopen_xwrite_close(const char* file, const char *str) FAST_FUNC;
+
+/* Close fd, but check for failures (some types of write errors) */
+extern void xclose(int fd) FAST_FUNC;
 
 /* Reads and prints to stdout till eof, then closes FILE. Exits on error: */
 extern void xprint_and_close_file(FILE *file) FAST_FUNC;
@@ -1275,6 +1280,7 @@ enum { COMM_LEN = 16 };
 #endif
 typedef struct procps_status_t {
 	DIR *dir;
+	IF_FEATURE_SHOW_THREADS(DIR *task_dir;)
 	uint8_t shift_pages_to_bytes;
 	uint8_t shift_pages_to_kb;
 /* Fields are set to 0/NULL if failed to determine (or not requested) */
@@ -1343,11 +1349,12 @@ enum {
 				|| ENABLE_PIDOF
 				|| ENABLE_SESTATUS
 				),
-	IF_SELINUX(PSSCAN_CONTEXT = 1 << 17,)
+	PSSCAN_CONTEXT  = (1 << 17) * ENABLE_SELINUX,
 	PSSCAN_START_TIME = 1 << 18,
 	PSSCAN_CPU      = (1 << 19) * ENABLE_FEATURE_TOP_SMP_PROCESS,
 	PSSCAN_NICE     = (1 << 20) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
 	PSSCAN_RUIDGID  = (1 << 21) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
+	PSSCAN_TASKS	= (1 << 22) * ENABLE_FEATURE_SHOW_THREADS,
 	/* These are all retrieved from proc/NN/stat in one go: */
 	PSSCAN_STAT     = PSSCAN_PPID | PSSCAN_PGID | PSSCAN_SID
 	/**/            | PSSCAN_COMM | PSSCAN_STATE

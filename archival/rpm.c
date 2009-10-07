@@ -202,12 +202,12 @@ static void extract_cpio_gz(int fd)
 	archive_handle->seek = seek_by_read;
 	//archive_handle->action_header = header_list;
 	archive_handle->action_data = data_extract_all;
-	archive_handle->ah_flags = ARCHIVE_PRESERVE_DATE | ARCHIVE_CREATE_LEADING_DIRS
+	archive_handle->ah_flags = ARCHIVE_RESTORE_DATE | ARCHIVE_CREATE_LEADING_DIRS
 		/* compat: overwrite existing files.
 		 * try "rpm -i foo.src.rpm" few times in a row -
 		 * standard rpm will not complain.
 		 * (TODO? real rpm creates "file;1234" and then renames it) */
-		| ARCHIVE_EXTRACT_UNCONDITIONAL;
+		| ARCHIVE_UNLINK_OLD;
 	archive_handle->src_fd = fd;
 	/*archive_handle->offset = 0; - init_handle() did it */
 
@@ -324,7 +324,7 @@ static char *rpm_getstr(int tag, int itemindex)
 		return NULL;
 	if (found[0]->type == RPM_STRING_TYPE || found[0]->type == RPM_I18NSTRING_TYPE || found[0]->type == RPM_STRING_ARRAY_TYPE) {
 		int n;
-		char *tmpstr = (char *) (map + found[0]->offset);
+		char *tmpstr = (char *) map + found[0]->offset;
 		for (n=0; n < itemindex; n++)
 			tmpstr = tmpstr + strlen(tmpstr) + 1;
 		return tmpstr;
@@ -343,7 +343,7 @@ static int rpm_getint(int tag, int itemindex)
 	if (!found || itemindex >= found[0]->count)
 		return -1;
 
-	tmpint = (int *) (map + found[0]->offset);
+	tmpint = (int *) ((char *) map + found[0]->offset);
 
 	if (found[0]->type == RPM_INT32_TYPE) {
 		tmpint = (int *) ((char *) tmpint + itemindex*4);
