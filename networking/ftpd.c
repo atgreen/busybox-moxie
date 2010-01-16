@@ -630,7 +630,7 @@ popen_ls(const char *opt)
 	cwd = xrealloc_getcwd_or_warn(NULL);
 	xpiped_pair(outfd);
 
-	/*fflush(NULL); - so far we dont use stdio on output */
+	/*fflush_all(); - so far we dont use stdio on output */
 	pid = BB_MMU ? fork() : vfork();
 	if (pid < 0)
 		bb_perror_msg_and_die(BB_MMU ? "fork" : "vfork");
@@ -691,9 +691,7 @@ handle_dir_common(int opts)
 	/* -n prevents user/groupname display,
 	 * which can be problematic in chroot */
 	ls_fd = popen_ls((opts & LONG_LISTING) ? "-l" : "-1");
-	ls_fp = fdopen(ls_fd, "r");
-	if (!ls_fp) /* never happens. paranoia */
-		bb_perror_msg_and_die("fdopen");
+	ls_fp = xfdopen_for_read(ls_fd);
 
 	if (opts & USE_CTRL_CONN) {
 		/* STAT <filename> */

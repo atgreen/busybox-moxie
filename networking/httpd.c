@@ -1021,7 +1021,7 @@ static void send_headers(int responseNum)
 		strftime(tmp_str, sizeof(tmp_str), RFC1123FMT, gmtime(&last_mod));
 #if ENABLE_FEATURE_HTTPD_RANGES
 		if (responseNum == HTTP_PARTIAL_CONTENT) {
-			len += sprintf(iobuf + len, "Content-Range: bytes %"OFF_FMT"d-%"OFF_FMT"d/%"OFF_FMT"d\r\n",
+			len += sprintf(iobuf + len, "Content-Range: bytes %"OFF_FMT"u-%"OFF_FMT"u/%"OFF_FMT"u\r\n",
 					range_start,
 					range_end,
 					file_size);
@@ -1032,7 +1032,7 @@ static void send_headers(int responseNum)
 #if ENABLE_FEATURE_HTTPD_RANGES
 			"Accept-Ranges: bytes\r\n"
 #endif
-			"Last-Modified: %s\r\n%s %"OFF_FMT"d\r\n",
+			"Last-Modified: %s\r\n%s %"OFF_FMT"u\r\n",
 				tmp_str,
 				"Content-length:",
 				file_size
@@ -1167,7 +1167,7 @@ static NOINLINE void cgi_io_loop_and_exit(int fromCgi_rd, int toCgi_wr, int post
 			break;
 		}
 
-		if (pfd[TO_CGI].revents) {
+		if (pfd[TO_CGI].revents & POLLOUT) {
 			/* hdr_cnt > 0 here due to the way pfd[TO_CGI].events set */
 			/* Have data from peer and can write to CGI */
 			count = safe_write(toCgi_wr, hdr_ptr, hdr_cnt);
@@ -1184,7 +1184,7 @@ static NOINLINE void cgi_io_loop_and_exit(int fromCgi_rd, int toCgi_wr, int post
 			}
 		}
 
-		if (pfd[0].revents) {
+		if (pfd[0].revents & POLLIN) {
 			/* post_len > 0 && hdr_cnt == 0 here */
 			/* We expect data, prev data portion is eaten by CGI
 			 * and there *is* data to read from the peer
@@ -1202,7 +1202,7 @@ static NOINLINE void cgi_io_loop_and_exit(int fromCgi_rd, int toCgi_wr, int post
 			}
 		}
 
-		if (pfd[FROM_CGI].revents) {
+		if (pfd[FROM_CGI].revents & POLLIN) {
 			/* There is something to read from CGI */
 			char *rbuf = iobuf;
 
@@ -2347,7 +2347,12 @@ int httpd_main(int argc UNUSED_PARAM, char **argv)
 #endif
 #if ENABLE_FEATURE_HTTPD_AUTH_MD5
 	if (opt & OPT_MD5) {
-		puts(pw_encrypt(pass, "$1$", 1));
+		char salt[sizeof("$1$XXXXXXXX")];
+		salt[0] = '$';
+		salt[1] = '1';
+		salt[2] = '$';
+		crypt_make_salt(salt + 3, 4, 0);
+		puts(pw_encrypt(pass, salt, 1));
 		return 0;
 	}
 #endif

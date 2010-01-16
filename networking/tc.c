@@ -191,8 +191,8 @@ static int cbq_print_opt(struct rtattr *opt)
 	struct tc_cbq_wrropt *wrr = NULL;
 	struct tc_cbq_fopt *fopt = NULL;
 	struct tc_cbq_ovl *ovl = NULL;
-	const char * const error = "CBQ: too short %s opt";
-	RESERVE_CONFIG_BUFFER(buf, 64);
+	const char *const error = "CBQ: too short %s opt";
+	char buf[64];
 
 	if (opt == NULL)
 		goto done;
@@ -272,7 +272,6 @@ static int cbq_print_opt(struct rtattr *opt)
 		}
 	}
  done:
-	RELEASE_CONFIG_BUFFER(buf);
 	return 0;
 }
 
@@ -531,7 +530,7 @@ int tc_main(int argc UNUSED_PARAM, char **argv)
 		if (rtnl_dump_request(&rth, obj == OBJ_qdisc ? RTM_GETQDISC :
 						obj == OBJ_class ? RTM_GETTCLASS : RTM_GETTFILTER,
 						&msg, sizeof(msg)) < 0)
-			bb_simple_perror_msg_and_die("cannot send dump request");
+			bb_simple_perror_msg_and_die("can't send dump request");
 
 		xrtnl_dump_filter(&rth, obj == OBJ_qdisc ? print_qdisc :
 						obj == OBJ_class ? print_class : print_filter,

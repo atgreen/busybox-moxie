@@ -661,6 +661,20 @@ config NSLOOKUP
 	help
 	  nslookup is a tool to query Internet name servers.
 
+config NTPD
+	bool "ntpd"
+	default n
+	help
+	  The NTP client/server daemon.
+
+config FEATURE_NTPD_SERVER
+        bool "Make ntpd usable as a NTP server"
+        default y
+        depends on NTPD
+        help
+	  Make ntpd usable as a NTP server. If you disable this option
+	  ntpd will be usable only as a NTP client.
+
 config PING
 	bool "ping"
 	default n
@@ -846,12 +860,19 @@ config FEATURE_TFTP_PUT
 	  Also enable download support in tftpd, if tftpd is selected.
 
 config FEATURE_TFTP_BLOCKSIZE
-	bool "Enable \"blksize\" protocol option"
+	bool "Enable 'blksize' and 'tsize' protocol options"
 	default n
 	depends on TFTP || TFTPD
 	help
 	  Allow tftp to specify block size, and tftpd to understand
-	  "blksize" option.
+	  "blksize" and "tsize" options.
+
+config FEATURE_TFTP_PROGRESS_BAR
+	bool "Enable tftp progress meter"
+	default n
+	depends on TFTP && FEATURE_TFTP_BLOCKSIZE
+	help
+	  Show progress bar.
 
 config TFTP_DEBUG
 	bool "Enable debug"
@@ -866,6 +887,13 @@ config TRACEROUTE
 	default n
 	help
 	  Utility to trace the route of IP packets.
+
+config TRACEROUTE6
+	bool "traceroute6"
+	default n
+	depends on FEATURE_IPV6 && TRACEROUTE
+	help
+	  Utility to trace the route of IPv6 packets.
 
 config FEATURE_TRACEROUTE_VERBOSE
 	bool "Enable verbose output"
@@ -895,7 +923,7 @@ source networking/udhcp/Config.in
 config IFUPDOWN_UDHCPC_CMD_OPTIONS
 	string "ifup udhcpc command line options"
 	default "-R -n"
-	depends on IFUPDOWN && APP_UDHCPC
+	depends on IFUPDOWN && UDHCPC
 	help
 	  Command line options to pass to udhcpc from ifup.
 	  Intended to alter options not available in /etc/network/interfaces.

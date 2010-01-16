@@ -545,7 +545,8 @@ decode_one_format(const char *s_orig, const char *s, struct tspec *tspec)
 
 		c = *s++;
 		p = strchr(CSIL, *s);
-		if (!p) {
+		/* if *s == NUL, p != NULL! Testcase: "od -tx" */
+		if (!p || *p == '\0') {
 			size = sizeof(int);
 			if (isdigit(s[0])) {
 				size = bb_strtou(s, &end, 0);
@@ -807,7 +808,7 @@ skip(off_t n_skip)
 	}
 
 	if (n_skip)
-		bb_error_msg_and_die("cannot skip past end of combined input");
+		bb_error_msg_and_die("can't skip past end of combined input");
 }
 
 

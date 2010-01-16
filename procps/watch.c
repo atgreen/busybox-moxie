@@ -62,9 +62,9 @@ int watch_main(int argc UNUSED_PARAM, char **argv)
 				strftime(header + width - time_len, time_len,
 					"%Y-%m-%d %H:%M:%S", localtime(&t));
 
-			puts(header);
+			printf("%s\n\n", header); /* compat: empty line */
 		}
-		fflush(stdout);
+		fflush_all();
 		// TODO: 'real' watch pipes cmd's output to itself
 		// and does not allow it to overflow the screen
 		// (taking into account linewrap!)

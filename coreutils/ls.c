@@ -633,7 +633,7 @@ static void showdirs(struct dnode **dn, int first)
 		}
 		subdnp = list_dir((*dn)->fullname, &nfiles);
 #if ENABLE_DESKTOP
-		if (all_fmt & STYLE_LONG)
+		if ((all_fmt & STYLE_MASK) == STYLE_LONG)
 			printf("total %"OFF_FMT"u\n", calculate_blocks(subdnp));
 #endif
 		if (nfiles > 0) {
@@ -829,7 +829,9 @@ static NOINLINE unsigned list_single(const struct dnode *dn)
 		} else {
 			if (all_fmt & LS_DISP_HR) {
 				column += printf("%9s ",
-					make_human_readable_str(dn->dstat.st_size, 1, 0));
+					/* print st_size, show one fractional, use suffixes */
+					make_human_readable_str(dn->dstat.st_size, 1, 0)
+				);
 			} else {
 				column += printf("%9"OFF_FMT"u ", (off_t) dn->dstat.st_size);
 			}
@@ -943,7 +945,7 @@ int ls_main(int argc UNUSED_PARAM, char **argv)
 
 	INIT_G();
 
-	check_unicode_in_env();
+	init_unicode();
 
 	all_fmt = LIST_SHORT |
 		(ENABLE_FEATURE_LS_SORTFILES * (SORT_NAME | SORT_FORWARD));

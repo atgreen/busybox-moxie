@@ -143,7 +143,7 @@ static unsigned get_kernel_HZ(void)
 		kernel_HZ = get_HZ_by_waiting();
 
 	//if (open_read_close("/proc/uptime", buf, sizeof(buf) <= 0)
-	//	bb_perror_msg_and_die("cannot read %s", "/proc/uptime");
+	//	bb_perror_msg_and_die("can't read %s", "/proc/uptime");
 	//buf[sizeof(buf)-1] = '\0';
 	///sscanf(buf, "%llu", &seconds_since_boot);
 	sysinfo(&info);
@@ -303,7 +303,7 @@ static const ps_out_t out_spec[] = {
 	{ 8                  , "user"  ,"USER"   ,func_user  ,PSSCAN_UIDGID  },
 	{ 8                  , "group" ,"GROUP"  ,func_group ,PSSCAN_UIDGID  },
 	{ 16                 , "comm"  ,"COMMAND",func_comm  ,PSSCAN_COMM    },
-	{ 256                , "args"  ,"COMMAND",func_args  ,PSSCAN_COMM    },
+	{ MAX_WIDTH          , "args"  ,"COMMAND",func_args  ,PSSCAN_COMM    },
 	{ 5                  , "pid"   ,"PID"    ,func_pid   ,PSSCAN_PID     },
 	{ 5                  , "ppid"  ,"PPID"   ,func_ppid  ,PSSCAN_PPID    },
 	{ 5                  , "pgid"  ,"PGID"   ,func_pgid  ,PSSCAN_PGID    },
@@ -383,7 +383,7 @@ static void parse_o(char* opt)
 		print_header = 1;
 }
 
-static void post_process(void)
+static void alloc_line_buffer(void)
 {
 	int i;
 	int width = 0;
@@ -393,6 +393,12 @@ static void post_process(void)
 			print_header = 1;
 		}
 		width += out[i].width + 1; /* "FIELD " */
+		if ((int)(width - terminal_width) > 0) {
+			/* The rest does not fit on the screen */
+			//out[i].width -= (width - terminal_width - 1);
+			out_cnt = i + 1;
+			break;
+		}
 	}
 #if ENABLE_SELINUX
 	if (!is_selinux_enabled())
@@ -477,7 +483,11 @@ int ps_main(int argc UNUSED_PARAM, char **argv)
 	// -l  Generate a long listing
 	// -o col1,col2,col3=header
 	//     Select which columns to display
-	/* We allow (and ignore) most of the above. FIXME */
+	/* We allow (and ignore) most of the above. FIXME.
+	 * -T is picked for threads (POSIX hasn't it standardized).
+	 * procps v3.2.7 supports -T and shows tids as SPID column,
+	 * it also supports -L where it shows tids as LWP column.
+	 */
 	opt_complementary = "o::";
 	opt = getopt32(argv, "Zo:aAdefl"IF_FEATURE_SHOW_THREADS("T"), &opt_o);
 	if (opt_o) {
@@ -497,7 +507,6 @@ int ps_main(int argc UNUSED_PARAM, char **argv)
 		}
 		parse_o(default_o);
 	}
-	post_process();
 #if ENABLE_FEATURE_SHOW_THREADS
 	if (opt & OPT_T)
 		need_flags |= PSSCAN_TASKS;
@@ -511,6 +520,7 @@ int ps_main(int argc UNUSED_PARAM, char **argv)
 		if (--terminal_width > MAX_WIDTH)
 			terminal_width = MAX_WIDTH;
 	}
+	alloc_line_buffer();
 	format_header();
 
 	p = NULL;

@@ -77,9 +77,8 @@ static char *build_row(char *p, unsigned *dp);
 #define	HEAD_SEP	2		/* spaces between day headings */
 
 int cal_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
-int cal_main(int argc, char **argv)
+int cal_main(int argc UNUSED_PARAM, char **argv)
 {
-	struct tm *local_time;
 	struct tm zero_tm;
 	time_t now;
 	unsigned month, year, flags, i;
@@ -92,21 +91,21 @@ int cal_main(int argc, char **argv)
 	option_mask32 &= 1;
 	month = 0;
 	argv += optind;
-	argc -= optind;
 
-	if (argc > 2) {
-		bb_show_usage();
-	}
+	if (!argv[0]) {
+		struct tm *ptm;
 
-	if (!argc) {
 		time(&now);
-		local_time = localtime(&now);
-		year = local_time->tm_year + 1900;
+		ptm = localtime(&now);
+		year = ptm->tm_year + 1900;
 		if (!(flags & 2)) { /* no -y */
-			month = local_time->tm_mon + 1;
+			month = ptm->tm_mon + 1;
 		}
 	} else {
-		if (argc == 2) {
+		if (argv[1]) {
+			if (argv[2]) {
+				bb_show_usage();
+			}
 			month = xatou_range(*argv++, 1, 12);
 		}
 		year = xatou_range(*argv, 1, 9999);
@@ -117,11 +116,17 @@ int cal_main(int argc, char **argv)
 	i = 0;
 	do {
 		zero_tm.tm_mon = i;
+		/* full month name according to locale */
 		strftime(buf, sizeof(buf), "%B", &zero_tm);
 		month_names[i] = xstrdup(buf);
 
 		if (i < 7) {
 			zero_tm.tm_wday = i;
+//FIXME: unicode
+//Bug 839:
+//testcase with doublewidth Japanese chars: "LANG=zh_TW.utf8 cal"
+//perhaps use wc[s]width() to probe terminal width
+			/* abbreviated weekday name according to locale */
 			strftime(buf, sizeof(buf), "%a", &zero_tm);
 			strncpy(day_headings + i * (3+julian) + julian, buf, 2);
 		}
@@ -262,7 +267,7 @@ static void trim_trailing_spaces_and_print(char *s)
 	}
 	while (p != s) {
 		--p;
-		if (!(isspace)(*p)) {	/* We want the function... not the inline. */
+		if (!isspace(*p)) {
 			p[1] = '\0';
 			break;
 		}

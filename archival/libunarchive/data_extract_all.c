@@ -13,9 +13,12 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 	int res;
 
 	if (archive_handle->ah_flags & ARCHIVE_CREATE_LEADING_DIRS) {
-		char *name = xstrdup(file_header->name);
-		bb_make_directory(dirname(name), -1, FILEUTILS_RECUR);
-		free(name);
+		char *slash = strrchr(file_header->name, '/');
+		if (slash) {
+			*slash = '\0';
+			bb_make_directory(file_header->name, -1, FILEUTILS_RECUR);
+			*slash = '/';
+		}
 	}
 
 	if (archive_handle->ah_flags & ARCHIVE_UNLINK_OLD) {
@@ -30,13 +33,13 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 	}
 	else if (archive_handle->ah_flags & ARCHIVE_EXTRACT_NEWER) {
 		/* Remove the existing entry if its older than the extracted entry */
-		struct stat statbuf;
-		if (lstat(file_header->name, &statbuf) == -1) {
+		struct stat existing_sb;
+		if (lstat(file_header->name, &existing_sb) == -1) {
 			if (errno != ENOENT) {
 				bb_perror_msg_and_die("can't stat old file");
 			}
 		}
-		else if (statbuf.st_mtime <= file_header->mtime) {
+		else if (existing_sb.st_mtime >= file_header->mtime) {
 			if (!(archive_handle->ah_flags & ARCHIVE_EXTRACT_QUIET)) {
 				bb_error_msg("%s not created: newer or "
 					"same age file exists", file_header->name);
@@ -52,8 +55,9 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 
 	/* Handle hard links separately
 	 * We identified hard links as regular files of size 0 with a symlink */
-	if (S_ISREG(file_header->mode) && (file_header->link_target)
-	 && (file_header->size == 0)
+	if (S_ISREG(file_header->mode)
+	 && file_header->link_target
+	 && file_header->size == 0
 	) {
 		/* hard link */
 		res = link(file_header->link_target, file_header->name);
@@ -68,8 +72,11 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 		switch (file_header->mode & S_IFMT) {
 		case S_IFREG: {
 			/* Regular file */
+			int flags = O_WRONLY | O_CREAT | O_EXCL;
+			if (archive_handle->ah_flags & ARCHIVE_O_TRUNC)
+				flags = O_WRONLY | O_CREAT | O_TRUNC;
 			dst_fd = xopen3(file_header->name,
-				O_WRONLY | O_CREAT | O_EXCL,
+				flags,
 				file_header->mode
 				);
 			bb_copyfd_exact_size(archive_handle->src_fd, dst_fd, file_header->size);
@@ -120,15 +127,16 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 			uid_t uid = file_header->uid;
 			gid_t gid = file_header->gid;
 
-			if (file_header->uname) {
-				struct passwd *pwd = getpwnam(file_header->uname);
+			if (file_header->tar__uname) {
+//TODO: cache last name/id pair?
+				struct passwd *pwd = getpwnam(file_header->tar__uname);
 				if (pwd) uid = pwd->pw_uid;
 			}
-			if (file_header->gname) {
-				struct group *grp = getgrnam(file_header->gname);
+			if (file_header->tar__gname) {
+				struct group *grp = getgrnam(file_header->tar__gname);
 				if (grp) gid = grp->gr_gid;
 			}
-			/* GNU tar 1.15.1 use chown, not lchown */
+			/* GNU tar 1.15.1 uses chown, not lchown */
 			chown(file_header->name, uid, gid);
 		} else
 #endif
@@ -143,9 +151,11 @@ void FAST_FUNC data_extract_all(archive_handle_t *archive_handle)
 		}
 		/* same for utime */
 		if (archive_handle->ah_flags & ARCHIVE_RESTORE_DATE) {
-			struct utimbuf t;
-			t.actime = t.modtime = file_header->mtime;
-			utime(file_header->name, &t);
+			struct timeval t[2];
+
+			t[1].tv_sec = t[0].tv_sec = file_header->mtime;
+			t[1].tv_usec = t[0].tv_usec = 0;
+			utimes(file_header->name, t);
 		}
 	}
 }

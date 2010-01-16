@@ -35,7 +35,7 @@ static unsigned long kscale(unsigned long b, unsigned long bs)
 #endif
 
 int df_main(int argc, char **argv) MAIN_EXTERNALLY_VISIBLE;
-int df_main(int argc, char **argv)
+int df_main(int argc UNUSED_PARAM, char **argv)
 {
 	unsigned long blocks_used;
 	unsigned blocks_percent_used;
@@ -58,7 +58,7 @@ int df_main(int argc, char **argv)
 	const char *disp_units_hdr = NULL;
 	char *chp;
 
-	check_unicode_in_env();
+	init_unicode();
 
 #if ENABLE_FEATURE_HUMAN_READABLE && ENABLE_FEATURE_DF_FANCY
 	opt_complementary = "k-mB:m-Bk:B-km";
@@ -92,7 +92,10 @@ int df_main(int argc, char **argv)
 	if (disp_units_hdr == NULL) {
 #if ENABLE_FEATURE_HUMAN_READABLE
 		disp_units_hdr = xasprintf("%s-blocks",
-			make_human_readable_str(df_disp_hr, 0, !!(opt & OPT_POSIX)));
+			/* print df_disp_hr, show no fractionals,
+			 * use suffixes if OPT_POSIX is set in opt */
+			make_human_readable_str(df_disp_hr, 0, !!(opt & OPT_POSIX))
+		);
 #else
 		disp_units_hdr = xasprintf("%lu-blocks", df_disp_hr);
 #endif
@@ -102,7 +105,7 @@ int df_main(int argc, char **argv)
 
 	mount_table = NULL;
 	argv += optind;
-	if (optind >= argc) {
+	if (!argv[0]) {
 		mount_table = setmntent(bb_path_mtab_file, "r");
 		if (!mount_table)
 			bb_perror_msg_and_die(bb_path_mtab_file);
@@ -164,10 +167,9 @@ int df_main(int argc, char **argv)
 				continue;
 
 #ifdef WHY_WE_DO_IT_FOR_DEV_ROOT_ONLY
-/* ... and also this is the only user of find_block_device */
 			if (strcmp(device, "/dev/root") == 0) {
 				/* Adjusts device to be the real root device,
-				* or leaves device alone if it can't find it */
+				 * or leaves device alone if it can't find it */
 				device = find_block_device("/");
 				if (!device) {
 					goto set_error;
@@ -180,7 +182,7 @@ int df_main(int argc, char **argv)
 			if (dev_len > 20) {
 				printf("%s\n%20s", device, "");
 			} else {
-				printf("%s%*s", device, 20 - dev_len, "");
+				printf("%s%*s", device, 20 - (int)dev_len, "");
 			}
 #else
 			if (printf("\n%-20s" + 1, device) > 20)
@@ -189,21 +191,27 @@ int df_main(int argc, char **argv)
 
 #if ENABLE_FEATURE_HUMAN_READABLE
 			printf(" %9s ",
+				/* f_blocks x f_bsize / df_disp_hr, show one fractional,
+				 * use suffixes if df_disp_hr == 0 */
 				make_human_readable_str(s.f_blocks, s.f_bsize, df_disp_hr));
 
 			printf(" %9s " + 1,
+				/* EXPR x f_bsize / df_disp_hr, show one fractional,
+				 * use suffixes if df_disp_hr == 0 */
 				make_human_readable_str((s.f_blocks - s.f_bfree),
 						s.f_bsize, df_disp_hr));
 
 			printf("%9s %3u%% %s\n",
-					make_human_readable_str(s.f_bavail, s.f_bsize, df_disp_hr),
-					blocks_percent_used, mount_point);
+				/* f_bavail x f_bsize / df_disp_hr, show one fractional,
+				 * use suffixes if df_disp_hr == 0 */
+				make_human_readable_str(s.f_bavail, s.f_bsize, df_disp_hr),
+				blocks_percent_used, mount_point);
 #else
 			printf(" %9lu %9lu %9lu %3u%% %s\n",
-					kscale(s.f_blocks, s.f_bsize),
-					kscale(s.f_blocks - s.f_bfree, s.f_bsize),
-					kscale(s.f_bavail, s.f_bsize),
-					blocks_percent_used, mount_point);
+				kscale(s.f_blocks, s.f_bsize),
+				kscale(s.f_blocks - s.f_bfree, s.f_bsize),
+				kscale(s.f_bavail, s.f_bsize),
+				blocks_percent_used, mount_point);
 #endif
 		}
 	}
