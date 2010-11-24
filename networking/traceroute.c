@@ -364,7 +364,7 @@ wait_for_reply(len_and_sockaddr *from_lsa, struct sockaddr *to)
 		read_len = recv_from_to(rcvsock,
 				recv_pkt, sizeof(recv_pkt),
 				/*flags:*/ 0,
-            			&from_lsa->u.sa, to, from_lsa->len);
+				&from_lsa->u.sa, to, from_lsa->len);
 	}
 
 	return read_len;
@@ -666,7 +666,6 @@ packet_ok(int read_len, len_and_sockaddr *from_lsa,
 				return (type == ICMP6_TIME_EXCEEDED ? -1 : (code<<8)+1);
 			}
 		}
-
 	}
 
 # if ENABLE_FEATURE_TRACEROUTE_VERBOSE

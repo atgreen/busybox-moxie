@@ -3,7 +3,7 @@
  *
  * Author: Adam Tkac <vonsch@gmail.com>
  *
- * Licensed under GPLv2, see file LICENSE in this tarball for details.
+ * Licensed under GPLv2, see file LICENSE in this source tree.
  *
  * Parts of OpenNTPD clock syncronization code is replaced by
  * code which is based on ntp-4.2.6, whuch carries the following
@@ -49,13 +49,17 @@
 /* High-level description of the algorithm:
  *
  * We start running with very small poll_exp, BURSTPOLL,
- * in order to quickly accumulate INITIAL_SAMLPES datapoints
+ * in order to quickly accumulate INITIAL_SAMPLES datapoints
  * for each peer. Then, time is stepped if the offset is larger
  * than STEP_THRESHOLD, otherwise it isn't; anyway, we enlarge
  * poll_exp to MINPOLL and enter frequency measurement step:
  * we collect new datapoints but ignore them for WATCH_THRESHOLD
  * seconds. After WATCH_THRESHOLD seconds we look at accumulated
  * offset and estimate frequency drift.
+ *
+ * (frequency measurement step seems to not be strictly needed,
+ * it is conditionally disabled with USING_INITIAL_FREQ_ESTIMATION
+ * define set to 0)
  *
  * After this, we enter "steady state": we collect a datapoint,
  * we select the best peer, if this datapoint is not a new one
@@ -73,24 +77,30 @@
 
 #define RETRY_INTERVAL  5       /* on error, retry in N secs */
 #define RESPONSE_INTERVAL 15    /* wait for reply up to N secs */
-#define INITIAL_SAMLPES 4       /* how many samples do we want for init */
+#define INITIAL_SAMPLES 4       /* how many samples do we want for init */
 
 /* Clock discipline parameters and constants */
-#define STEP_THRESHOLD  0.128   /* step threshold (s) */
-#define WATCH_THRESHOLD 150     /* stepout threshold (s). std ntpd uses 900 (11 mins (!)) */
+
+/* Step threshold (sec). std ntpd uses 0.128.
+ * Using exact power of 2 (1/8) results in smaller code */
+#define STEP_THRESHOLD  0.125
+#define WATCH_THRESHOLD 128     /* stepout threshold (sec). std ntpd uses 900 (11 mins (!)) */
 /* NB: set WATCH_THRESHOLD to ~60 when debugging to save time) */
-//UNUSED: #define PANIC_THRESHOLD 1000    /* panic threshold (s) */
+//UNUSED: #define PANIC_THRESHOLD 1000    /* panic threshold (sec) */
 
 #define FREQ_TOLERANCE  0.000015 /* frequency tolerance (15 PPM) */
-#define BURSTPOLL       0	/* initial poll */
-#define MINPOLL         4       /* minimum poll interval (6: 64 s) */
+#define BURSTPOLL       0       /* initial poll */
+#define MINPOLL         5       /* minimum poll interval. std ntpd uses 6 (6: 64 sec) */
 #define BIGPOLL         10      /* drop to lower poll at any trouble (10: 17 min) */
-#define MAXPOLL         12      /* maximum poll interval (12: 1.1h, 17: 36.4h) (was 17) */
-#define POLLDOWN_OFFSET (STEP_THRESHOLD / 3) /* actively lower poll when we see such big offsets */
-#define MINDISP         0.01    /* minimum dispersion (s) */
-#define MAXDISP         16      /* maximum dispersion (s) */
+#define MAXPOLL         12      /* maximum poll interval (12: 1.1h, 17: 36.4h). std ntpd uses 17 */
+/* Actively lower poll when we see such big offsets.
+ * With STEP_THRESHOLD = 0.125, it means we try to sync more aggressively
+ * if offset increases over 0.03 sec */
+#define POLLDOWN_OFFSET (STEP_THRESHOLD / 4)
+#define MINDISP         0.01    /* minimum dispersion (sec) */
+#define MAXDISP         16      /* maximum dispersion (sec) */
 #define MAXSTRAT        16      /* maximum stratum (infinity metric) */
-#define MAXDIST         1       /* distance threshold (s) */
+#define MAXDIST         1       /* distance threshold (sec) */
 #define MIN_SELECTED    1       /* minimum intersection survivors */
 #define MIN_CLUSTERED   3       /* minimum cluster survivors */
 
@@ -109,7 +119,7 @@
  * by staying at smaller poll).
  */
 #define POLLADJ_GATE    4
-/* Compromise Allan intercept (s). doc uses 1500, std ntpd uses 512 */
+/* Compromise Allan intercept (sec). doc uses 1500, std ntpd uses 512 */
 #define ALLAN           512
 /* PLL loop gain */
 #define PLL             65536
@@ -214,6 +224,9 @@ typedef struct {
 } peer_t;
 
 
+#define USING_KERNEL_PLL_LOOP          1
+#define USING_INITIAL_FREQ_ESTIMATION  0
+
 enum {
 	OPT_n = (1 << 0),
 	OPT_q = (1 << 1),
@@ -281,21 +294,26 @@ struct globals {
 #define G_precision_sec  (1.0 / (1 << (- G_precision_exp)))
 	uint8_t  stratum;
 	/* Bool. After set to 1, never goes back to 0: */
-	smallint adjtimex_was_done;
 	smallint initial_poll_complete;
 
+#define STATE_NSET      0       /* initial state, "nothing is set" */
+//#define STATE_FSET    1       /* frequency set from file */
+#define STATE_SPIK      2       /* spike detected */
+//#define STATE_FREQ    3       /* initial frequency */
+#define STATE_SYNC      4       /* clock synchronized (normal operation) */
 	uint8_t  discipline_state;      // doc calls it c.state
 	uint8_t  poll_exp;              // s.poll
 	int      polladj_count;         // c.count
 	long     kernel_freq_drift;
+	peer_t   *last_update_peer;
 	double   last_update_offset;    // c.last
 	double   last_update_recv_time; // s.t
 	double   discipline_jitter;     // c.jitter
-//TODO: add s.jitter - grep for it here and see clock_combine() in doc
-#define USING_KERNEL_PLL_LOOP 1
+	//double   cluster_offset;        // s.offset
+	//double   cluster_jitter;        // s.jitter
 #if !USING_KERNEL_PLL_LOOP
 	double   discipline_freq_drift; // c.freq
-//TODO: conditionally calculate wander? it's used only for logging
+	/* Maybe conditionally calculate wander? it's used only for logging */
 	double   discipline_wander;     // c.wander
 #endif
 };
@@ -574,18 +592,19 @@ filter_datapoints(peer_t *p)
 			p->filter_offset, x,
 			p->filter_dispersion,
 			p->filter_jitter);
-
 }
 
 static void
 reset_peer_stats(peer_t *p, double offset)
 {
 	int i;
+	bool small_ofs = fabs(offset) < 16 * STEP_THRESHOLD;
+
 	for (i = 0; i < NUM_DATAPOINTS; i++) {
-		if (offset < 16 * STEP_THRESHOLD) {
-			p->filter_datapoint[i].d_recv_time -= offset;
+		if (small_ofs) {
+			p->filter_datapoint[i].d_recv_time += offset;
 			if (p->filter_datapoint[i].d_offset != 0) {
-				p->filter_datapoint[i].d_offset -= offset;
+				p->filter_datapoint[i].d_offset += offset;
 			}
 		} else {
 			p->filter_datapoint[i].d_recv_time  = G.cur_time;
@@ -593,14 +612,13 @@ reset_peer_stats(peer_t *p, double offset)
 			p->filter_datapoint[i].d_dispersion = MAXDISP;
 		}
 	}
-	if (offset < 16 * STEP_THRESHOLD) {
-		p->lastpkt_recv_time -= offset;
+	if (small_ofs) {
+		p->lastpkt_recv_time += offset;
 	} else {
 		p->reachable_bits = 0;
 		p->lastpkt_recv_time = G.cur_time;
 	}
 	filter_datapoints(p); /* recalc p->filter_xxx */
-	p->next_action_time -= offset;
 	VERB5 bb_error_msg("%s->lastpkt_recv_time=%f", p->p_dotted, p->lastpkt_recv_time);
 }
 
@@ -715,6 +733,13 @@ send_query_to_peer(peer_t *p)
 }
 
 
+/* Note that there is no provision to prevent several run_scripts
+ * to be done in quick succession. In fact, it happens rather often
+ * if initial syncronization results in a step.
+ * You will see "step" and then "stratum" script runs, sometimes
+ * as close as only 0.002 seconds apart.
+ * Script should be ready to deal with this.
+ */
 static void run_script(const char *action, double offset)
 {
 	char *argv[3];
@@ -745,7 +770,7 @@ static void run_script(const char *action, double offset)
 
 	/* Don't want to wait: it may run hwclock --systohc, and that
 	 * may take some time (seconds): */
-	/*wait4pid(spawn(argv));*/
+	/*spawn_and_wait(argv);*/
 	spawn(argv);
 
 	unsetenv("stratum");
@@ -788,10 +813,14 @@ step_time(double offset)
 	for (item = G.ntp_peers; item != NULL; item = item->link) {
 		peer_t *pp = (peer_t *) item->data;
 		reset_peer_stats(pp, offset);
+		//bb_error_msg("offset:%f pp->next_action_time:%f -> %f",
+		//	offset, pp->next_action_time, pp->next_action_time + offset);
+		pp->next_action_time += offset;
 	}
 	/* Globals: */
-	G.cur_time -= offset;
-	G.last_update_recv_time -= offset;
+	G.cur_time += offset;
+	G.last_update_recv_time += offset;
+	G.last_script_run += offset;
 }
 
 
@@ -802,6 +831,7 @@ typedef struct {
 	peer_t *p;
 	int    type;
 	double edge;
+	double opt_rd; /* optimization */
 } point_t;
 static int
 compare_point_edge(const void *aa, const void *bb)
@@ -835,7 +865,7 @@ fit(peer_t *p, double rd)
 		VERB3 bb_error_msg("peer %s unfit for selection: unreachable", p->p_dotted);
 		return 0;
 	}
-#if 0	/* we filter out such packets earlier */
+#if 0 /* we filter out such packets earlier */
 	if ((p->lastpkt_status & LI_ALARM) == LI_ALARM
 	 || p->lastpkt_stratum >= MAXSTRAT
 	) {
@@ -857,6 +887,7 @@ fit(peer_t *p, double rd)
 static peer_t*
 select_and_cluster(void)
 {
+	peer_t     *p;
 	llist_t    *item;
 	int        i, j;
 	int        size = 3 * G.peer_cnt;
@@ -874,10 +905,11 @@ select_and_cluster(void)
 	num_points = 0;
 	item = G.ntp_peers;
 	if (G.initial_poll_complete) while (item != NULL) {
-		peer_t *p = (peer_t *) item->data;
-		double rd = root_distance(p);
-		double offset = p->filter_offset;
+		double rd, offset;
 
+		p = (peer_t *) item->data;
+		rd = root_distance(p);
+		offset = p->filter_offset;
 		if (!fit(p, rd)) {
 			item = item->link;
 			continue;
@@ -892,14 +924,17 @@ select_and_cluster(void)
 		point[num_points].p = p;
 		point[num_points].type = -1;
 		point[num_points].edge = offset - rd;
+		point[num_points].opt_rd = rd;
 		num_points++;
 		point[num_points].p = p;
 		point[num_points].type = 0;
 		point[num_points].edge = offset;
+		point[num_points].opt_rd = rd;
 		num_points++;
 		point[num_points].p = p;
 		point[num_points].type = 1;
 		point[num_points].edge = offset + rd;
+		point[num_points].opt_rd = rd;
 		num_points++;
 		item = item->link;
 	}
@@ -980,14 +1015,12 @@ select_and_cluster(void)
 	 */
 	num_survivors = 0;
 	for (i = 0; i < num_points; i++) {
-		peer_t *p;
-
 		if (point[i].edge < low || point[i].edge > high)
 			continue;
 		p = point[i].p;
 		survivor[num_survivors].p = p;
-//TODO: save root_distance in point_t and reuse here?
-		survivor[num_survivors].metric = MAXDIST * p->lastpkt_stratum + root_distance(p);
+		/* x.opt_rd == root_distance(p); */
+		survivor[num_survivors].metric = MAXDIST * p->lastpkt_stratum + point[i].opt_rd;
 		VERB4 bb_error_msg("survivor[%d] metric:%f peer:%s",
 			num_survivors, survivor[num_survivors].metric, p->p_dotted);
 		num_survivors++;
@@ -1031,8 +1064,8 @@ select_and_cluster(void)
 		 */
 		for (i = 0; i < num_survivors; i++) {
 			double selection_jitter_sq;
-			peer_t *p = survivor[i].p;
 
+			p = survivor[i].p;
 			if (i == 0 || p->filter_jitter < min_jitter)
 				min_jitter = p->filter_jitter;
 
@@ -1074,18 +1107,54 @@ select_and_cluster(void)
 		}
 	}
 
+	if (0) {
+		/* Combine the offsets of the clustering algorithm survivors
+		 * using a weighted average with weight determined by the root
+		 * distance. Compute the selection jitter as the weighted RMS
+		 * difference between the first survivor and the remaining
+		 * survivors. In some cases the inherent clock jitter can be
+		 * reduced by not using this algorithm, especially when frequent
+		 * clockhopping is involved. bbox: thus we don't do it.
+		 */
+		double x, y, z, w;
+		y = z = w = 0;
+		for (i = 0; i < num_survivors; i++) {
+			p = survivor[i].p;
+			x = root_distance(p);
+			y += 1 / x;
+			z += p->filter_offset / x;
+			w += SQUARE(p->filter_offset - survivor[0].p->filter_offset) / x;
+		}
+		//G.cluster_offset = z / y;
+		//G.cluster_jitter = SQRT(w / y);
+	}
+
 	/* Pick the best clock. If the old system peer is on the list
 	 * and at the same stratum as the first survivor on the list,
 	 * then don't do a clock hop. Otherwise, select the first
 	 * survivor on the list as the new system peer.
 	 */
-//TODO - see clock_combine()
+	p = survivor[0].p;
+	if (G.last_update_peer
+	 && G.last_update_peer->lastpkt_stratum <= p->lastpkt_stratum
+	) {
+		/* Starting from 1 is ok here */
+		for (i = 1; i < num_survivors; i++) {
+			if (G.last_update_peer == survivor[i].p) {
+				VERB4 bb_error_msg("keeping old synced peer");
+				p = G.last_update_peer;
+				goto keep_old;
+			}
+		}
+	}
+	G.last_update_peer = p;
+ keep_old:
 	VERB3 bb_error_msg("selected peer %s filter_offset:%f age:%f",
-			survivor[0].p->p_dotted,
-			survivor[0].p->filter_offset,
-			G.cur_time - survivor[0].p->lastpkt_recv_time
+			p->p_dotted,
+			p->filter_offset,
+			G.cur_time - p->lastpkt_recv_time
 	);
-	return survivor[0].p;
+	return p;
 }
 
 
@@ -1105,19 +1174,13 @@ set_new_values(int disc_state, double offset, double recv_time)
 	G.last_update_offset = offset;
 	G.last_update_recv_time = recv_time;
 }
-/* Clock state definitions */
-#define STATE_NSET      0       /* initial state, "nothing is set" */
-#define STATE_FSET      1       /* frequency set from file */
-#define STATE_SPIK      2       /* spike detected */
-#define STATE_FREQ      3       /* initial frequency */
-#define STATE_SYNC      4       /* clock synchronized (normal operation) */
 /* Return: -1: decrease poll interval, 0: leave as is, 1: increase */
 static NOINLINE int
 update_local_clock(peer_t *p)
 {
 	int rc;
-	long old_tmx_offset;
 	struct timex tmx;
+	/* Note: can use G.cluster_offset instead: */
 	double offset = p->filter_offset;
 	double recv_time = p->lastpkt_recv_time;
 	double abs_offset;
@@ -1130,8 +1193,8 @@ update_local_clock(peer_t *p)
 	abs_offset = fabs(offset);
 
 #if 0
-	/* If needed, -S script can detect this by looking at $offset
-	 * env var and kill parent */
+	/* If needed, -S script can do it by looking at $offset
+	 * env var and killing parent */
 	/* If the offset is too large, give up and go home */
 	if (abs_offset > PANIC_THRESHOLD) {
 		bb_error_msg_and_die("offset %f far too big, exiting", offset);
@@ -1156,6 +1219,7 @@ update_local_clock(peer_t *p)
 #if !USING_KERNEL_PLL_LOOP
 	freq_drift = 0;
 #endif
+#if USING_INITIAL_FREQ_ESTIMATION
 	if (G.discipline_state == STATE_FREQ) {
 		/* Ignore updates until the stepout threshold */
 		if (since_last_update < WATCH_THRESHOLD) {
@@ -1163,10 +1227,11 @@ update_local_clock(peer_t *p)
 					WATCH_THRESHOLD - since_last_update);
 			return 0; /* "leave poll interval as is" */
 		}
-#if !USING_KERNEL_PLL_LOOP
+# if !USING_KERNEL_PLL_LOOP
 		freq_drift = (offset - G.last_update_offset) / since_last_update;
-#endif
+# endif
 	}
+#endif
 
 	/* There are two main regimes: when the
 	 * offset exceeds the step threshold and when it does not.
@@ -1225,10 +1290,12 @@ update_local_clock(peer_t *p)
 
 		run_script("step", offset);
 
+#if USING_INITIAL_FREQ_ESTIMATION
 		if (G.discipline_state == STATE_NSET) {
 			set_new_values(STATE_FREQ, /*offset:*/ 0, recv_time);
 			return 1; /* "ok to increase poll interval" */
 		}
+#endif
 		set_new_values(STATE_SYNC, /*offset:*/ 0, recv_time);
 
 	} else { /* abs_offset <= STEP_THRESHOLD */
@@ -1255,11 +1322,15 @@ update_local_clock(peer_t *p)
 				 */
 				exit(0);
 			}
+#if USING_INITIAL_FREQ_ESTIMATION
 			/* This is the first update received and the frequency
 			 * has not been initialized. The first thing to do
 			 * is directly measure the oscillator frequency.
 			 */
 			set_new_values(STATE_FREQ, offset, recv_time);
+#else
+			set_new_values(STATE_SYNC, offset, recv_time);
+#endif
 			VERB3 bb_error_msg("transitioning to FREQ, datapoint ignored");
 			return 0; /* "leave poll interval as is" */
 
@@ -1274,6 +1345,7 @@ update_local_clock(peer_t *p)
 			break;
 #endif
 
+#if USING_INITIAL_FREQ_ESTIMATION
 		case STATE_FREQ:
 			/* since_last_update >= WATCH_THRESHOLD, we waited enough.
 			 * Correct the phase and frequency and switch to SYNC state.
@@ -1281,6 +1353,7 @@ update_local_clock(peer_t *p)
 			 */
 			set_new_values(STATE_SYNC, offset, recv_time);
 			break;
+#endif
 
 		default:
 #if !USING_KERNEL_PLL_LOOP
@@ -1320,7 +1393,7 @@ update_local_clock(peer_t *p)
 	G.ntp_status = p->lastpkt_status;
 	G.refid = p->lastpkt_refid;
 	G.rootdelay = p->lastpkt_rootdelay + p->lastpkt_delay;
-	dtemp = p->filter_jitter; // SQRT(SQUARE(p->filter_jitter) + SQUARE(s.jitter));
+	dtemp = p->filter_jitter; // SQRT(SQUARE(p->filter_jitter) + SQUARE(G.cluster_jitter));
 	dtemp += MAXD(p->filter_dispersion + FREQ_TOLERANCE * (G.cur_time - p->lastpkt_recv_time) + abs_offset, MINDISP);
 	G.rootdisp = p->lastpkt_rootdisp + dtemp;
 	VERB3 bb_error_msg("updating leap/refid/reftime/rootdisp from peer %s", p->p_dotted);
@@ -1357,17 +1430,6 @@ update_local_clock(peer_t *p)
 				tmx.freq, tmx.offset, tmx.constant, tmx.status);
 	}
 
-	old_tmx_offset = 0;
-	if (!G.adjtimex_was_done) {
-		G.adjtimex_was_done = 1;
-		/* When we use adjtimex for the very first time,
-		 * we need to ADD to pre-existing tmx.offset - it may be !0
-		 */
-		memset(&tmx, 0, sizeof(tmx));
-		if (adjtimex(&tmx) < 0)
-			bb_perror_msg_and_die("adjtimex");
-		old_tmx_offset = tmx.offset;
-	}
 	memset(&tmx, 0, sizeof(tmx));
 #if 0
 //doesn't work, offset remains 0 (!) in kernel:
@@ -1380,9 +1442,8 @@ update_local_clock(peer_t *p)
 	tmx.offset = G.last_update_offset * 1000000; /* usec */
 #endif
 	tmx.modes = ADJ_OFFSET | ADJ_STATUS | ADJ_TIMECONST;// | ADJ_MAXERROR | ADJ_ESTERROR;
-	tmx.offset = (G.last_update_offset * 1000000) /* usec */
+	tmx.offset = (G.last_update_offset * 1000000); /* usec */
 			/* + (G.last_update_offset < 0 ? -0.5 : 0.5) - too small to bother */
-			+ old_tmx_offset; /* almost always 0 */
 	tmx.status = STA_PLL;
 	if (G.ntp_status & LI_PLUSSEC)
 		tmx.status |= STA_INS;
@@ -1410,7 +1471,8 @@ update_local_clock(peer_t *p)
 	}
 #endif
 	G.kernel_freq_drift = tmx.freq / 65536;
-	VERB2 bb_error_msg("update offset:%f, clock drift:%ld ppm", G.last_update_offset, G.kernel_freq_drift);
+	VERB2 bb_error_msg("update peer:%s, offset:%f, clock drift:%ld ppm",
+			p->p_dotted, G.last_update_offset, G.kernel_freq_drift);
 
 	return 1; /* "ok to increase poll interval" */
 }
@@ -1579,9 +1641,7 @@ recv_and_process_peer_pkt(peer_t *p)
 			/* If drift is dangerously large, immediately
 			 * drop poll interval one step down.
 			 */
-			if (q->filter_offset < -POLLDOWN_OFFSET
-			 || q->filter_offset > POLLDOWN_OFFSET
-			) {
+			if (fabs(q->filter_offset) >= POLLDOWN_OFFSET) {
 				VERB3 bb_error_msg("offset:%f > POLLDOWN_OFFSET", q->filter_offset);
 				goto poll_down;
 			}
@@ -1705,6 +1765,10 @@ recv_and_process_client_pkt(void /*int fd*/)
 	/* this time was obtained between poll() and recv() */
 	msg.m_rectime = d_to_lfp(G.cur_time);
 	msg.m_xmttime = d_to_lfp(gettime1900d()); /* this instant */
+	if (G.peer_cnt == 0) {
+		/* we have no peers: "stratum 1 server" mode. reftime = our own time */
+		G.reftime = G.cur_time;
+	}
 	msg.m_reftime = d_to_lfp(G.reftime);
 	msg.m_orgtime = query_xmttime;
 	msg.m_rootdelay = d_to_sfp(G.rootdelay);
@@ -1842,8 +1906,13 @@ static NOINLINE void ntp_init(char **argv)
 		bb_show_usage();
 //	if (opts & OPT_x) /* disable stepping, only slew is allowed */
 //		G.time_was_stepped = 1;
-	while (peers)
-		add_peers(llist_pop(&peers));
+	if (peers) {
+		while (peers)
+			add_peers(llist_pop(&peers));
+	} else {
+		/* -l but no peers: "stratum 1 server" mode */
+		G.stratum = 1;
+	}
 	if (!(opts & OPT_n)) {
 		bb_daemonize_or_rexec(DAEMON_DEVNULL_STDIO, argv);
 		logmode = LOGMODE_NONE;
@@ -1860,9 +1929,28 @@ static NOINLINE void ntp_init(char **argv)
 	if (opts & OPT_N)
 		setpriority(PRIO_PROCESS, 0, -15);
 
-	bb_signals((1 << SIGTERM) | (1 << SIGINT), record_signo);
-	/* Removed SIGHUP here: */
-	bb_signals((1 << SIGPIPE) | (1 << SIGCHLD), SIG_IGN);
+	/* If network is up, syncronization occurs in ~10 seconds.
+	 * We give "ntpd -q" a full minute to finish, then we exit.
+	 *
+	 * I tested ntpd 4.2.6p1 and apparently it never exits
+	 * (will try forever), but it does not feel right.
+	 * The goal of -q is to act like ntpdate: set time
+	 * after a reasonably small period of polling, or fail.
+	 */
+	if (opts & OPT_q)
+		alarm(60);
+
+	bb_signals(0
+		| (1 << SIGTERM)
+		| (1 << SIGINT)
+		| (1 << SIGALRM)
+		, record_signo
+	);
+	bb_signals(0
+		| (1 << SIGPIPE)
+		| (1 << SIGCHLD)
+		, SIG_IGN
+	);
 }
 
 int ntpd_main(int argc UNUSED_PARAM, char **argv) MAIN_EXTERNALLY_VISIBLE;
@@ -1884,14 +1972,14 @@ int ntpd_main(int argc UNUSED_PARAM, char **argv)
 	idx2peer = xzalloc(sizeof(idx2peer[0]) * cnt);
 	pfd = xzalloc(sizeof(pfd[0]) * cnt);
 
-	/* Countdown: we never sync before we sent INITIAL_SAMLPES+1
+	/* Countdown: we never sync before we sent INITIAL_SAMPLES+1
 	 * packets to each peer.
 	 * NB: if some peer is not responding, we may end up sending
 	 * fewer packets to it and more to other peers.
-	 * NB2: sync usually happens using INITIAL_SAMLPES packets,
+	 * NB2: sync usually happens using INITIAL_SAMPLES packets,
 	 * since last reply does not come back instantaneously.
 	 */
-	cnt = G.peer_cnt * (INITIAL_SAMLPES + 1);
+	cnt = G.peer_cnt * (INITIAL_SAMPLES + 1);
 
 	while (!bb_got_signal) {
 		llist_t *item;
@@ -1955,9 +2043,7 @@ int ntpd_main(int argc UNUSED_PARAM, char **argv)
 		nfds = poll(pfd, i, timeout * 1000);
 		gettime1900d(); /* sets G.cur_time */
 		if (nfds <= 0) {
-			if (G.adjtimex_was_done
-			 && G.cur_time - G.last_script_run > 11*60
-			) {
+			if (G.script_name && G.cur_time - G.last_script_run > 11*60) {
 				/* Useful for updating battery-backed RTC and such */
 				run_script("periodic", G.last_update_offset);
 				gettime1900d(); /* sets G.cur_time */
@@ -2002,7 +2088,6 @@ int ntpd_main(int argc UNUSED_PARAM, char **argv)
 static double
 direct_freq(double fp_offset)
 {
-
 #ifdef KERNEL_PLL
 	/*
 	 * If the kernel is enabled, we need the residual offset to
@@ -2025,7 +2110,7 @@ direct_freq(double fp_offset)
 }
 
 static void
-set_freq(double	freq) /* frequency update */
+set_freq(double freq) /* frequency update */
 {
 	char tbuf[80];
 

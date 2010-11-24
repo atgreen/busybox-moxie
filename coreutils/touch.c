@@ -4,7 +4,7 @@
  *
  * Copyright (C) 1999-2004 by Erik Andersen <andersen@codepoet.org>
  *
- * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+ * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 
 /* BB_AUDIT SUSv3 _NOT_ compliant -- options -a, -m, -r, -t not supported. */
@@ -97,14 +97,14 @@ int touch_main(int argc UNUSED_PARAM, char **argv)
 		parse_datestr(date_str, &tm_time);
 
 		/* Correct any day of week and day of year etc. fields */
-		tm_time.tm_isdst = -1;	/* Be sure to recheck dst */
+		tm_time.tm_isdst = -1;  /* Be sure to recheck dst */
 		t = validate_tm_time(date_str, &tm_time);
 
 		timebuf[1].tv_sec = timebuf[0].tv_sec = t;
 	}
 
 	do {
-		if (utimes(*argv, reference_file ? timebuf : NULL) != 0) {
+		if (utimes(*argv, (reference_file || date_str) ? timebuf : NULL) != 0) {
 			if (errno == ENOENT) { /* no such file */
 				if (opts) { /* creation is disabled, so ignore */
 					continue;
@@ -113,7 +113,7 @@ int touch_main(int argc UNUSED_PARAM, char **argv)
 				fd = open(*argv, O_RDWR | O_CREAT, 0666);
 				if (fd >= 0) {
 					xclose(fd);
-					if (reference_file)
+					if (reference_file || date_str)
 						utimes(*argv, timebuf);
 					continue;
 				}

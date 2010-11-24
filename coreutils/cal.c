@@ -4,7 +4,7 @@
  *
  * See original copyright at the end of this file
  *
- * Licensed under GPLv2 or later, see file LICENSE in this tarball for details.
+ * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 
 /* BB_AUDIT SUSv3 compliant with -j and -y extensions (from util-linux). */
@@ -16,8 +16,8 @@
  *
  * Major size reduction... over 50% (>1.5k) on i386.
  */
-
 #include "libbb.h"
+#include "unicode.h"
 
 /* We often use "unsigned" intead of "int", it's easier to div on most CPUs */
 
@@ -83,8 +83,15 @@ int cal_main(int argc UNUSED_PARAM, char **argv)
 	time_t now;
 	unsigned month, year, flags, i;
 	char *month_names[12];
-	char day_headings[28];	/* 28 for julian, 21 for nonjulian */
+	/* normal heading: */
+	/* "Su Mo Tu We Th Fr Sa" */
+	/* -j heading: */
+	/* " Su  Mo  Tu  We  Th  Fr  Sa" */
+	char day_headings[ENABLE_UNICODE_SUPPORT ? 28 * 6 : 28];
+	IF_UNICODE_SUPPORT(char *hp = day_headings;)
 	char buf[40];
+
+	init_unicode();
 
 	flags = getopt32(argv, "jy");
 	/* This sets julian = flags & 1: */
@@ -106,7 +113,10 @@ int cal_main(int argc UNUSED_PARAM, char **argv)
 			if (argv[2]) {
 				bb_show_usage();
 			}
-			month = xatou_range(*argv++, 1, 12);
+			if (!(flags & 2)) { /* no -y */
+				month = xatou_range(*argv, 1, 12);
+			}
+			argv++;
 		}
 		year = xatou_range(*argv, 1, 9999);
 	}
@@ -122,15 +132,24 @@ int cal_main(int argc UNUSED_PARAM, char **argv)
 
 		if (i < 7) {
 			zero_tm.tm_wday = i;
-//FIXME: unicode
-//Bug 839:
-//testcase with doublewidth Japanese chars: "LANG=zh_TW.utf8 cal"
-//perhaps use wc[s]width() to probe terminal width
 			/* abbreviated weekday name according to locale */
 			strftime(buf, sizeof(buf), "%a", &zero_tm);
+#if ENABLE_UNICODE_SUPPORT
+			if (julian)
+				*hp++ = ' ';
+			{
+				char *two_wchars = unicode_conv_to_printable_fixedwidth(NULL, buf, 2);
+				strcpy(hp, two_wchars);
+				free(two_wchars);
+			}
+			hp += strlen(hp);
+			*hp++ = ' ';
+#else
 			strncpy(day_headings + i * (3+julian) + julian, buf, 2);
+#endif
 		}
 	} while (++i < 12);
+	IF_UNICODE_SUPPORT(hp[-1] = '\0';)
 
 	if (month) {
 		unsigned row, len, days[MAXDAYS];

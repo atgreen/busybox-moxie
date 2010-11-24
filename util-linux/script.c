@@ -6,9 +6,9 @@
  *
  * Based on code from util-linux v 2.12r
  * Copyright (c) 1980
- *	The Regents of the University of California.  All rights reserved.
+ * The Regents of the University of California.  All rights reserved.
  *
- * Licensed under GPLv2 or later, see file License in this tarball for details.
+ * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 #include "libbb.h"
 
@@ -88,10 +88,7 @@ int script_main(int argc UNUSED_PARAM, char **argv)
 
 	/* TODO: SIGWINCH? pass window size changes down to slave? */
 
-	child_pid = vfork();
-	if (child_pid < 0) {
-		bb_perror_msg_and_die("vfork");
-	}
+	child_pid = xvfork();
 
 	if (child_pid) {
 		/* parent */
@@ -119,7 +116,7 @@ int script_main(int argc UNUSED_PARAM, char **argv)
 				 * for example, try "script -c true" */
 				break;
 			}
-			if (pfd[0].revents & POLLIN) {
+			if (pfd[0].revents) {
 				errno = 0;
 				count = safe_read(pty, buf, sizeof(buf));
 				if (count <= 0 && errno != EAGAIN) {
@@ -143,7 +140,7 @@ int script_main(int argc UNUSED_PARAM, char **argv)
 					}
 				}
 			}
-			if (pfd[1].revents & POLLIN) {
+			if (pfd[1].revents) {
 				count = safe_read(STDIN_FILENO, buf, sizeof(buf));
 				if (count <= 0) {
 					/* err/eof from stdin: don't read stdin anymore */

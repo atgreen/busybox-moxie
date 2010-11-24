@@ -58,7 +58,7 @@ struct globals {
 	struct pollfd pfd[1];
 	unsigned stamplog;
 #endif
-};
+} FIX_ALIASING;
 #define G (*(struct globals*)&bb_common_bufsiz1)
 #define sv          (G.sv          )
 #define svdir       (G.svdir       )
@@ -276,7 +276,7 @@ int runsvdir_main(int argc UNUSED_PARAM, char **argv)
 	}
  run:
 #endif
-	curdir = open_read(".");
+	curdir = open(".", O_RDONLY|O_NDELAY);
 	if (curdir == -1)
 		fatal2_cannot("open current directory", "");
 	close_on_exec_on(curdir);
