@@ -12,13 +12,13 @@
 #include "libbb.h"
 
 
-typedef struct unsigned_to_name_map_t {
-	long id;
+typedef struct id_to_name_map_t {
+	uid_t id;
 	char name[USERNAME_MAX_SIZE];
-} unsigned_to_name_map_t;
+} id_to_name_map_t;
 
 typedef struct cache_t {
-	unsigned_to_name_map_t *cache;
+	id_to_name_map_t *cache;
 	int size;
 } cache_t;
 
@@ -39,7 +39,7 @@ void FAST_FUNC clear_username_cache(void)
 #if 0 /* more generic, but we don't need that yet */
 /* Returns -N-1 if not found. */
 /* cp->cache[N] is allocated and must be filled in this case */
-static int get_cached(cache_t *cp, unsigned id)
+static int get_cached(cache_t *cp, uid_t id)
 {
 	int i;
 	for (i = 0; i < cp->size; i++)
@@ -52,8 +52,8 @@ static int get_cached(cache_t *cp, unsigned id)
 }
 #endif
 
-static char* get_cached(cache_t *cp, long id,
-			char* FAST_FUNC x2x_utoa(long id))
+static char* get_cached(cache_t *cp, uid_t id,
+			char* FAST_FUNC x2x_utoa(uid_t id))
 {
 	int i;
 	for (i = 0; i < cp->size; i++)
@@ -154,6 +154,7 @@ static unsigned long fast_strtoul_10(char **endptr)
 	return n;
 }
 
+# if ENABLE_FEATURE_FAST_TOP
 static long fast_strtol_10(char **endptr)
 {
 	if (**endptr != '-')
@@ -162,6 +163,7 @@ static long fast_strtol_10(char **endptr)
 	(*endptr)++;
 	return - (long)fast_strtoul_10(endptr);
 }
+# endif
 
 static char *skip_fields(char *str, int count)
 {
@@ -302,6 +304,7 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 				goto got_entry;
 			closedir(sp->task_dir);
 			sp->task_dir = NULL;
+			sp->main_thread_pid = 0;
 		}
 #endif
 		entry = readdir(sp->dir);
@@ -321,6 +324,7 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 			char task_dir[sizeof("/proc/%u/task") + sizeof(int)*3];
 			sprintf(task_dir, "/proc/%u/task", pid);
 			sp->task_dir = xopendir(task_dir);
+			sp->main_thread_pid = pid;
 			continue;
 		}
 #endif
@@ -448,7 +452,7 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 //FIXME: is it safe to assume this field exists?
 			sp->last_seen_on_cpu = fast_strtoul_10(&cp);
 # endif
-#endif /* end of !ENABLE_FEATURE_TOP_SMP_PROCESS */
+#endif /* FEATURE_FAST_TOP */
 
 #if ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS
 			sp->niceness = tasknice;

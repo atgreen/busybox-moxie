@@ -39,13 +39,36 @@
 //config:	help
 //config:	  Enable 64-bit support in test.
 
+/* "test --help" does not print help (POSIX compat), only "[ --help" does.
+ * We display "<applet> EXPRESSION ]" here (not "<applet> EXPRESSION")
+ * Unfortunately, it screws up generated BusyBox.html. TODO. */
+//usage:#define test_trivial_usage
+//usage:       "EXPRESSION ]"
+//usage:#define test_full_usage "\n\n"
+//usage:       "Check file types, compare values etc. Return a 0/1 exit code\n"
+//usage:       "depending on logical value of EXPRESSION"
+//usage:
+//usage:#define test_example_usage
+//usage:       "$ test 1 -eq 2\n"
+//usage:       "$ echo $?\n"
+//usage:       "1\n"
+//usage:       "$ test 1 -eq 1\n"
+//usage:       "$ echo $?\n"
+//usage:       "0\n"
+//usage:       "$ [ -d /etc ]\n"
+//usage:       "$ echo $?\n"
+//usage:       "0\n"
+//usage:       "$ [ -d /junk ]\n"
+//usage:       "$ echo $?\n"
+//usage:       "1\n"
+
 #include "libbb.h"
 #include <setjmp.h>
 
 /* This is a NOFORK applet. Be very careful! */
 
 /* test_main() is called from shells, and we need to be extra careful here.
- * This is true regardless of PREFER_APPLETS and STANDALONE_SHELL
+ * This is true regardless of PREFER_APPLETS and SH_STANDALONE
  * state. */
 
 /* test(1) accepts the following grammar:
@@ -878,7 +901,10 @@ int test_main(int argc, char **argv)
 	res = !oexpr(check_operator(*args));
 
 	if (*args != NULL && *++args != NULL) {
-		/* TODO: example when this happens? */
+		/* Examples:
+		 * test 3 -lt 5 6
+		 * test -t 1 2
+		 */
 		bb_error_msg("%s: unknown operand", *args);
 		res = 2;
 	}

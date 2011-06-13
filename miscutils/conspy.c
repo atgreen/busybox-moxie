@@ -10,14 +10,14 @@
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 
-//applet:IF_CONSPY(APPLET(conspy, _BB_DIR_BIN, _BB_SUID_DROP))
+//applet:IF_CONSPY(APPLET(conspy, BB_DIR_BIN, BB_SUID_DROP))
 
 //kbuild:lib-$(CONFIG_CONSPY) += conspy.o
 
 //config:config CONSPY
 //config:	bool "conspy"
 //config:	default n
-//config:	depends on PLATFORM_LINUX
+//config:	select PLATFORM_LINUX
 //config:	help
 //config:	  A text-mode VNC like program for Linux virtual terminals.
 //config:	  example:  conspy NUM      shared access to console num
@@ -30,7 +30,6 @@
 //usage:     "A text-mode VNC like program for Linux virtual consoles."
 //usage:     "\nTo exit, quickly press ESC 3 times."
 //usage:     "\n"
-//usage:     "\nOptions:"
 //usage:     "\n	-v	Don't send keystrokes to the console"
 //usage:     "\n	-c	Create missing devices in /dev"
 //usage:     "\n	-s	Open a SHELL session"
@@ -316,10 +315,8 @@ static NOINLINE void start_shell_in_child(const char* tty_name)
 	int pid = xvfork();
 	if (pid == 0) {
 		struct termios termchild;
-		char *shell = getenv("SHELL");
+		const char *shell = get_shell_name();
 
-		if (!shell)
-			shell = (char *) DEFAULT_SHELL;
 		signal(SIGHUP, SIG_IGN);
 		// set tty as a controlling tty
 		setsid();
@@ -506,16 +503,17 @@ int conspy_main(int argc UNUSED_PARAM, char **argv)
 			}
 		}
 		poll_timeout_ms = 250;
+		if (option_mask32 & FLAG(v)) continue;
 
 		// Insert all keys pressed into the virtual console's input
 		// buffer.  Don't do this if the virtual console is in scan
 		// code mode - giving ASCII characters to a program expecting
 		// scan codes will confuse it.
-		if (!(option_mask32 & FLAG(v)) && G.escape_count == 0) {
+		G.key_count += bytes_read;
+		if (G.escape_count == 0) {
 			int handle, result;
 			long kbd_mode;
 
-			G.key_count += bytes_read;
 			handle = xopen(tty_name, O_WRONLY);
 			result = ioctl(handle, KDGKBMODE, &kbd_mode);
 			if (result >= 0) {

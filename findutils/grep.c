@@ -18,9 +18,9 @@
  * (C) 2006 Jac Goudsmit added -o option
  */
 
-//applet:IF_GREP(APPLET(grep, _BB_DIR_BIN, _BB_SUID_DROP))
-//applet:IF_FEATURE_GREP_EGREP_ALIAS(APPLET_ODDNAME(egrep, grep, _BB_DIR_BIN, _BB_SUID_DROP, egrep))
-//applet:IF_FEATURE_GREP_FGREP_ALIAS(APPLET_ODDNAME(fgrep, grep, _BB_DIR_BIN, _BB_SUID_DROP, fgrep))
+//applet:IF_GREP(APPLET(grep, BB_DIR_BIN, BB_SUID_DROP))
+//applet:IF_FEATURE_GREP_EGREP_ALIAS(APPLET_ODDNAME(egrep, grep, BB_DIR_BIN, BB_SUID_DROP, egrep))
+//applet:IF_FEATURE_GREP_FGREP_ALIAS(APPLET_ODDNAME(fgrep, grep, BB_DIR_BIN, BB_SUID_DROP, fgrep))
 
 //kbuild:lib-$(CONFIG_GREP) += grep.o
 
@@ -72,7 +72,6 @@
 //usage:       "PATTERN/-e PATTERN.../-f FILE [FILE]..."
 //usage:#define grep_full_usage "\n\n"
 //usage:       "Search for PATTERN in FILEs (or stdin)\n"
-//usage:     "\nOptions:"
 //usage:     "\n	-H	Add 'filename:' prefix"
 //usage:     "\n	-h	Do not add 'filename:' prefix"
 //usage:     "\n	-n	Add 'line_no:' prefix"

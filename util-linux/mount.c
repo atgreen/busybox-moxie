@@ -16,6 +16,65 @@
 // singlemount() can loop through /etc/filesystems for fstype detection.
 // mount_it_now() does the actual mount.
 //
+
+//usage:#define mount_trivial_usage
+//usage:       "[OPTIONS] [-o OPTS] DEVICE NODE"
+//usage:#define mount_full_usage "\n\n"
+//usage:       "Mount a filesystem. Filesystem autodetection requires /proc.\n"
+//usage:     "\n	-a		Mount all filesystems in fstab"
+//usage:	IF_FEATURE_MOUNT_FAKE(
+//usage:	IF_FEATURE_MTAB_SUPPORT(
+//usage:     "\n	-f		Update /etc/mtab, but don't mount"
+//usage:	)
+//usage:	IF_NOT_FEATURE_MTAB_SUPPORT(
+//usage:     "\n	-f		Dry run"
+//usage:	)
+//usage:	)
+//usage:	IF_FEATURE_MOUNT_HELPERS(
+//usage:     "\n	-i		Don't run mount helper"
+//usage:	)
+//usage:	IF_FEATURE_MTAB_SUPPORT(
+//usage:     "\n	-n		Don't update /etc/mtab"
+//usage:	)
+//usage:     "\n	-r		Read-only mount"
+//usage:     "\n	-w		Read-write mount (default)"
+//usage:     "\n	-t FSTYPE	Filesystem type"
+//usage:     "\n	-O OPT		Mount only filesystems with option OPT (-a only)"
+//usage:     "\n-o OPT:"
+//usage:	IF_FEATURE_MOUNT_LOOP(
+//usage:     "\n	loop		Ignored (loop devices are autodetected)"
+//usage:	)
+//usage:	IF_FEATURE_MOUNT_FLAGS(
+//usage:     "\n	[a]sync		Writes are [a]synchronous"
+//usage:     "\n	[no]atime	Disable/enable updates to inode access times"
+//usage:     "\n	[no]diratime	Disable/enable atime updates to directories"
+//usage:     "\n	[no]relatime	Disable/enable atime updates relative to modification time"
+//usage:     "\n	[no]dev		(Dis)allow use of special device files"
+//usage:     "\n	[no]exec	(Dis)allow use of executable files"
+//usage:     "\n	[no]suid	(Dis)allow set-user-id-root programs"
+//usage:     "\n	[r]shared	Convert [recursively] to a shared subtree"
+//usage:     "\n	[r]slave	Convert [recursively] to a slave subtree"
+//usage:     "\n	[r]private	Convert [recursively] to a private subtree"
+//usage:     "\n	[un]bindable	Make mount point [un]able to be bind mounted"
+//usage:     "\n	[r]bind		Bind a file or directory [recursively] to another location"
+//usage:     "\n	move		Relocate an existing mount point"
+//usage:	)
+//usage:     "\n	remount		Remount a mounted filesystem, changing flags"
+//usage:     "\n	ro/rw		Same as -r/-w"
+//usage:     "\n"
+//usage:     "\nThere are filesystem-specific -o flags."
+//usage:
+//usage:#define mount_example_usage
+//usage:       "$ mount\n"
+//usage:       "/dev/hda3 on / type minix (rw)\n"
+//usage:       "proc on /proc type proc (rw)\n"
+//usage:       "devpts on /dev/pts type devpts (rw)\n"
+//usage:       "$ mount /dev/fd0 /mnt -t msdos -o ro\n"
+//usage:       "$ mount /tmp/diskimage /opt -t ext2 -o loop\n"
+//usage:       "$ mount cd_image.iso mydir\n"
+//usage:#define mount_notes_usage
+//usage:       "Returns 0 for success, number of failed mounts for -a, or errno for one mount."
+
 #include <mntent.h>
 #include <syslog.h>
 #include <sys/mount.h>
@@ -181,6 +240,7 @@ static const int32_t mount_options[] = {
 		/* "relatime"    */ MS_RELATIME,
 		/* "norelatime"  */ ~MS_RELATIME,
 		/* "loud"        */ ~MS_SILENT,
+		/* "rbind"       */ MS_BIND|MS_RECURSIVE,
 
 		// action flags
 		/* "union"       */ MS_UNION,
@@ -192,7 +252,7 @@ static const int32_t mount_options[] = {
 		/* "unbindable"  */ MS_UNBINDABLE,
 		/* "rshared"     */ MS_SHARED|MS_RECURSIVE,
 		/* "rslave"      */ MS_SLAVE|MS_RECURSIVE,
-		/* "rprivate"    */ MS_SLAVE|MS_RECURSIVE,
+		/* "rprivate"    */ MS_PRIVATE|MS_RECURSIVE,
 		/* "runbindable" */ MS_UNBINDABLE|MS_RECURSIVE,
 	)
 
@@ -236,19 +296,20 @@ static const char mount_option_str[] =
 		"relatime\0"
 		"norelatime\0"
 		"loud\0"
+		"rbind\0"
 
 		// action flags
 		"union\0"
 		"bind\0"
 		"move\0"
-		"shared\0"
-		"slave\0"
-		"private\0"
-		"unbindable\0"
-		"rshared\0"
-		"rslave\0"
-		"rprivate\0"
-		"runbindable\0"
+		"make-shared\0"
+		"make-slave\0"
+		"make-private\0"
+		"make-unbindable\0"
+		"make-rshared\0"
+		"make-rslave\0"
+		"make-rprivate\0"
+		"make-runbindable\0"
 	)
 
 	// Always understood.
@@ -279,6 +340,61 @@ enum { GETMNTENT_BUFSIZE = COMMON_BUFSIZE - offsetof(struct globals, getmntent_b
 #define fslist            (G.fslist           )
 #define getmntent_buf     (G.getmntent_buf    )
 
+#if ENABLE_FEATURE_MTAB_SUPPORT
+/*
+ * update_mtab_entry_on_move() is used to update entry in case of mount --move.
+ * we are looking for existing entries mnt_dir which is equal to mnt_fsname of
+ * input mntent and replace it by new one.
+ */
+static void FAST_FUNC update_mtab_entry_on_move(const struct mntent *mp)
+{
+	struct mntent *entries, *m;
+	int i, count;
+	FILE *mountTable;
+
+	mountTable = setmntent(bb_path_mtab_file, "r");
+	if (!mountTable) {
+		bb_perror_msg(bb_path_mtab_file);
+		return;
+	}
+
+	entries = NULL;
+	count = 0;
+	while ((m = getmntent(mountTable)) != NULL) {
+		entries = xrealloc_vector(entries, 3, count);
+		entries[count].mnt_fsname = xstrdup(m->mnt_fsname);
+		entries[count].mnt_dir = xstrdup(m->mnt_dir);
+		entries[count].mnt_type = xstrdup(m->mnt_type);
+		entries[count].mnt_opts = xstrdup(m->mnt_opts);
+		entries[count].mnt_freq = m->mnt_freq;
+		entries[count].mnt_passno = m->mnt_passno;
+		count++;
+	}
+	endmntent(mountTable);
+
+	mountTable = setmntent(bb_path_mtab_file, "w");
+	if (mountTable) {
+		for (i = 0; i < count; i++) {
+			if (strcmp(entries[i].mnt_dir, mp->mnt_fsname) != 0)
+				addmntent(mountTable, &entries[i]);
+			else
+				addmntent(mountTable, mp);
+		}
+		endmntent(mountTable);
+	} else if (errno != EROFS)
+		bb_perror_msg(bb_path_mtab_file);
+
+	if (ENABLE_FEATURE_CLEAN_UP) {
+		for (i = 0; i < count; i++) {
+			free(entries[i].mnt_fsname);
+			free(entries[i].mnt_dir);
+			free(entries[i].mnt_type);
+			free(entries[i].mnt_opts);
+		}
+		free(entries);
+	}
+}
+#endif
 
 #if ENABLE_FEATURE_MOUNT_VERBOSE
 static int verbose_mount(const char *source, const char *target,
@@ -496,12 +612,11 @@ static int mount_it_now(struct mntent *mp, long vfsflags, char *filteropts)
 		int i;
 
 		if (!mountTable) {
-			bb_error_msg("no %s", bb_path_mtab_file);
+			bb_perror_msg(bb_path_mtab_file);
 			goto ret;
 		}
 
 		// Add vfs string flags
-
 		for (i = 0; mount_options[i] != MS_REMOUNT; i++) {
 			if (mount_options[i] > 0 && (mount_options[i] & vfsflags))
 				append_mount_options(&(mp->mnt_opts), option_str);
@@ -509,24 +624,28 @@ static int mount_it_now(struct mntent *mp, long vfsflags, char *filteropts)
 		}
 
 		// Remove trailing / (if any) from directory we mounted on
-
 		i = strlen(mp->mnt_dir) - 1;
-		if (i > 0 && mp->mnt_dir[i] == '/') mp->mnt_dir[i] = '\0';
+		while (i > 0 && mp->mnt_dir[i] == '/')
+			mp->mnt_dir[i--] = '\0';
 
 		// Convert to canonical pathnames as needed
-
 		mp->mnt_dir = bb_simplify_path(mp->mnt_dir);
-		fsname = 0;
+		fsname = NULL;
 		if (!mp->mnt_type || !*mp->mnt_type) { // bind mount
 			mp->mnt_fsname = fsname = bb_simplify_path(mp->mnt_fsname);
 			mp->mnt_type = (char*)"bind";
 		}
 		mp->mnt_freq = mp->mnt_passno = 0;
 
-		// Write and close.
-
-		addmntent(mountTable, mp);
+		// Write and close
+#if ENABLE_FEATURE_MTAB_SUPPORT
+		if (vfsflags & MS_MOVE)
+			update_mtab_entry_on_move(mp);
+		else
+#endif
+			addmntent(mountTable, mp);
 		endmntent(mountTable);
+
 		if (ENABLE_FEATURE_CLEAN_UP) {
 			free(mp->mnt_dir);
 			free(fsname);
@@ -1075,7 +1194,7 @@ static NOINLINE int nfsmount(struct mntent *mp, long vfsflags, char *filteropts)
 	noac = 0;
 	nordirplus = 0;
 	retry = 10000;		/* 10000 minutes ~ 1 week */
-	tcp = 0;
+	tcp = 1;			/* nfs-utils uses tcp per default */
 
 	mountprog = MOUNTPROG;
 	mountvers = 0;
@@ -1129,6 +1248,9 @@ static NOINLINE int nfsmount(struct mntent *mp, long vfsflags, char *filteropts)
 				continue;
 			case 20: // "addr" - ignore
 				continue;
+			case -1: // unknown
+				if (vfsflags & MS_REMOUNT)
+					continue;
 			}
 
 			val = xatoi_positive(opteq);

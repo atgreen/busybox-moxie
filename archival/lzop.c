@@ -25,6 +25,31 @@
    "Minimalized" for busybox by Alain Knaff
 */
 
+//usage:#define lzop_trivial_usage
+//usage:       "[-cfvd123456789CF] [FILE]..."
+//usage:#define lzop_full_usage "\n\n"
+//usage:       "	-1..9	Compression level"
+//usage:     "\n	-d	Decompress"
+//usage:     "\n	-c	Write to stdout"
+//usage:     "\n	-f	Force"
+//usage:     "\n	-v	Verbose"
+//usage:     "\n	-F	Don't store or verify checksum"
+//usage:     "\n	-C	Also write checksum of compressed block"
+//usage:
+//usage:#define lzopcat_trivial_usage
+//usage:       "[-vCF] [FILE]..."
+//usage:#define lzopcat_full_usage "\n\n"
+//usage:       "	-v	Verbose"
+//usage:     "\n	-F	Don't store or verify checksum"
+//usage:
+//usage:#define unlzop_trivial_usage
+//usage:       "[-cfvCF] [FILE]..."
+//usage:#define unlzop_full_usage "\n\n"
+//usage:       "	-c	Write to stdout"
+//usage:     "\n	-f	Force"
+//usage:     "\n	-v	Verbose"
+//usage:     "\n	-F	Don't store or verify checksum"
+
 #include "libbb.h"
 #include "archive.h"
 #include "liblzo_interface.h"
@@ -401,7 +426,7 @@ struct globals {
 #define INIT_G() do { } while (0)
 //#define G (*ptr_to_globals)
 //#define INIT_G() do {
-//        SET_PTR_TO_GLOBALS(xzalloc(sizeof(G)));
+//	SET_PTR_TO_GLOBALS(xzalloc(sizeof(G)));
 //} while (0)
 
 

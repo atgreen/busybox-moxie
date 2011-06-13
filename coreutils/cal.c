@@ -16,6 +16,14 @@
  *
  * Major size reduction... over 50% (>1.5k) on i386.
  */
+
+//usage:#define cal_trivial_usage
+//usage:       "[-jy] [[MONTH] YEAR]"
+//usage:#define cal_full_usage "\n\n"
+//usage:       "Display a calendar\n"
+//usage:     "\n	-j	Use julian dates"
+//usage:     "\n	-y	Display the entire year"
+
 #include "libbb.h"
 #include "unicode.h"
 
@@ -138,7 +146,7 @@ int cal_main(int argc UNUSED_PARAM, char **argv)
 			if (julian)
 				*hp++ = ' ';
 			{
-				char *two_wchars = unicode_conv_to_printable_fixedwidth(NULL, buf, 2);
+				char *two_wchars = unicode_conv_to_printable_fixedwidth(/*NULL,*/ buf, 2);
 				strcpy(hp, two_wchars);
 				free(two_wchars);
 			}

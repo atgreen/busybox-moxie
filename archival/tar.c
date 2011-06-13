@@ -23,6 +23,25 @@
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 
+/* TODO: security with -C DESTDIR option can be enhanced.
+ * Consider tar file created via:
+ * $ tar cvf bug.tar anything.txt
+ * $ ln -s /tmp symlink
+ * $ tar --append -f bug.tar symlink
+ * $ rm symlink
+ * $ mkdir symlink
+ * $ tar --append -f bug.tar symlink/evil.py
+ *
+ * This will result in an archive which contains:
+ * $ tar --list -f bug.tar
+ * anything.txt
+ * symlink
+ * symlink/evil.py
+ *
+ * Untarring it puts evil.py in '/tmp' even if the -C DESTDIR is given.
+ * This doesn't feel right, and IIRC GNU tar doesn't do that.
+ */
+
 #include <fnmatch.h>
 #include "libbb.h"
 #include "archive.h"
@@ -245,7 +264,8 @@ static int writeTarHeader(struct TarBallInfo *tbInfo,
 	PUT_OCTAL(header.uid, statbuf->st_uid);
 	PUT_OCTAL(header.gid, statbuf->st_gid);
 	memset(header.size, '0', sizeof(header.size)-1); /* Regular file size is handled later */
-	PUT_OCTAL(header.mtime, statbuf->st_mtime);
+	/* users report that files with negative st_mtime cause trouble, so: */
+	PUT_OCTAL(header.mtime, statbuf->st_mtime >= 0 ? statbuf->st_mtime : 0);
 
 	/* Enter the user and group names */
 	safe_strncpy(header.uname, get_cached_username(statbuf->st_uid), sizeof(header.uname));
@@ -297,15 +317,42 @@ static int writeTarHeader(struct TarBallInfo *tbInfo,
 	} else if (S_ISFIFO(statbuf->st_mode)) {
 		header.typeflag = FIFOTYPE;
 	} else if (S_ISREG(statbuf->st_mode)) {
-		if (sizeof(statbuf->st_size) > 4
-		 && statbuf->st_size > (off_t)0777777777777LL
+		/* header.size field is 12 bytes long */
+		/* Does octal-encoded size fit? */
+		uoff_t filesize = statbuf->st_size;
+		if (sizeof(filesize) <= 4
+		 || filesize <= (uoff_t)0777777777777LL
 		) {
+			PUT_OCTAL(header.size, filesize);
+		}
+		/* Does base256-encoded size fit?
+		 * It always does unless off_t is wider than 64 bits.
+		 */
+		else if (ENABLE_FEATURE_TAR_GNU_EXTENSIONS
+#if ULLONG_MAX > 0xffffffffffffffffLL /* 2^64-1 */
+		 && (filesize <= 0x3fffffffffffffffffffffffLL)
+#endif
+		) {
+	                /* GNU tar uses "base-256 encoding" for very large numbers.
+	                 * Encoding is binary, with highest bit always set as a marker
+	                 * and sign in next-highest bit:
+	                 * 80 00 .. 00 - zero
+	                 * bf ff .. ff - largest positive number
+	                 * ff ff .. ff - minus 1
+	                 * c0 00 .. 00 - smallest negative number
+			 */
+			char *p8 = header.size + sizeof(header.size);
+			do {
+				*--p8 = (uint8_t)filesize;
+				filesize >>= 8;
+			} while (p8 != header.size);
+			*p8 |= 0x80;
+		} else {
 			bb_error_msg_and_die("can't store file '%s' "
 				"of size %"OFF_FMT"u, aborting",
 				fileName, statbuf->st_size);
 		}
 		header.typeflag = REGTYPE;
-		PUT_OCTAL(header.size, statbuf->st_size);
 	} else {
 		bb_error_msg("%s: unknown file type", fileName);
 		return FALSE;
@@ -378,17 +425,8 @@ static int FAST_FUNC writeFileToTarball(const char *fileName, struct stat *statb
 
 	DBG("writeFileToTarball('%s')", fileName);
 
-	/* Strip leading '/' (must be before memorizing hardlink's name) */
-	header_name = fileName;
-	while (header_name[0] == '/') {
-		static smallint warned;
-
-		if (!warned) {
-			bb_error_msg("removing leading '/' from member names");
-			warned = 1;
-		}
-		header_name++;
-	}
+	/* Strip leading '/' and such (must be before memorizing hardlink's name) */
+	header_name = strip_unsafe_prefix(fileName);
 
 	if (header_name[0] == '\0')
 		return TRUE;
@@ -636,7 +674,7 @@ static llist_t *append_file_list_to_list(llist_t *list)
 	llist_t *newlist = NULL;
 
 	while (list) {
-		src_stream = xfopen_for_read(llist_pop(&list));
+		src_stream = xfopen_stdin(llist_pop(&list));
 		while ((line = xmalloc_fgetline(src_stream)) != NULL) {
 			/* kill trailing '/' unless the string is just "/" */
 			char *cp = last_char_is(line, '/');
@@ -701,11 +739,16 @@ static void handle_SIGCHLD(int status)
 #endif
 
 //usage:#define tar_trivial_usage
-//usage:       "-[" IF_FEATURE_TAR_CREATE("c") "xt" IF_FEATURE_SEAMLESS_GZ("z")
-//usage:	IF_FEATURE_SEAMLESS_BZ2("j") IF_FEATURE_SEAMLESS_LZMA("a")
-//usage:	IF_FEATURE_SEAMLESS_Z("Z") IF_FEATURE_TAR_NOPRESERVE_TIME("m") "vO] "
-//usage:	IF_FEATURE_TAR_FROM("[-X FILE] ")
-//usage:       "[-f TARFILE] [-C DIR] [FILE]..."
+//usage:	"-[" IF_FEATURE_TAR_CREATE("c") "xt"
+//usage:	IF_FEATURE_SEAMLESS_Z("Z")
+//usage:	IF_FEATURE_SEAMLESS_GZ("z")
+//usage:	IF_FEATURE_SEAMLESS_BZ2("j")
+//usage:	IF_FEATURE_SEAMLESS_LZMA("a")
+//usage:	IF_FEATURE_TAR_CREATE("h")
+//usage:	IF_FEATURE_TAR_NOPRESERVE_TIME("m")
+//usage:	"vO] "
+//usage:	IF_FEATURE_TAR_FROM("[-X FILE] [-T FILE] ")
+//usage:	"[-f TARFILE] [-C DIR] [FILE]..."
 //usage:#define tar_full_usage "\n\n"
 //usage:	IF_FEATURE_TAR_CREATE("Create, extract, ")
 //usage:	IF_NOT_FEATURE_TAR_CREATE("Extract ")
@@ -716,10 +759,12 @@ static void handle_SIGCHLD(int status)
 //usage:	)
 //usage:     "\n	x	Extract"
 //usage:     "\n	t	List"
-//usage:     "\nOptions:"
 //usage:     "\n	f	Name of TARFILE ('-' for stdin/out)"
 //usage:     "\n	C	Change to DIR before operation"
 //usage:     "\n	v	Verbose"
+//usage:	IF_FEATURE_SEAMLESS_Z(
+//usage:     "\n	Z	(De)compress using compress"
+//usage:	)
 //usage:	IF_FEATURE_SEAMLESS_GZ(
 //usage:     "\n	z	(De)compress using gzip"
 //usage:	)
@@ -728,9 +773,6 @@ static void handle_SIGCHLD(int status)
 //usage:	)
 //usage:	IF_FEATURE_SEAMLESS_LZMA(
 //usage:     "\n	a	(De)compress using lzma"
-//usage:	)
-//usage:	IF_FEATURE_SEAMLESS_Z(
-//usage:     "\n	Z	(De)compress using compress"
 //usage:	)
 //usage:     "\n	O	Extract to stdout"
 //usage:	IF_FEATURE_TAR_CREATE(
@@ -882,7 +924,6 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 	/* Prepend '-' to the first argument if required */
 	opt_complementary = "--:" // first arg is options
 		"tt:vv:" // count -t,-v
-		"?:" // bail out with usage instead of error return
 		"X::T::" // cumulative lists
 #if ENABLE_FEATURE_TAR_LONG_OPTIONS && ENABLE_FEATURE_TAR_FROM
 		"\xff::" // cumulative lists for --exclude
@@ -956,6 +997,7 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 		putenv((char*)"TAR_FILETYPE=f");
 		signal(SIGPIPE, SIG_IGN);
 		tar_handle->action_data = data_extract_to_command;
+		IF_FEATURE_TAR_TO_COMMAND(tar_handle->tar__to_command_shell = xstrdup(get_shell_name());)
 	}
 
 	if (opt & OPT_KEEP_OLD)
@@ -1037,8 +1079,10 @@ int tar_main(int argc UNUSED_PARAM, char **argv)
 			tar_handle->src_fd = tar_fd;
 			tar_handle->seek = seek_by_read;
 		} else {
-			if (ENABLE_FEATURE_TAR_AUTODETECT && flags == O_RDONLY) {
-				get_header_ptr = get_header_tar;
+			if (ENABLE_FEATURE_TAR_AUTODETECT
+			 && flags == O_RDONLY
+			 && get_header_ptr == get_header_tar
+			) {
 				tar_handle->src_fd = open_zipped(tar_filename);
 				if (tar_handle->src_fd < 0)
 					bb_perror_msg_and_die("can't open '%s'", tar_filename);

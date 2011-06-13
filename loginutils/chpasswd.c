@@ -7,6 +7,19 @@
  */
 #include "libbb.h"
 
+//usage:#define chpasswd_trivial_usage
+//usage:	IF_LONG_OPTS("[--md5|--encrypted]") IF_NOT_LONG_OPTS("[-m|-e]")
+//usage:#define chpasswd_full_usage "\n\n"
+//usage:       "Read user:password from stdin and update /etc/passwd\n"
+//usage:	IF_LONG_OPTS(
+//usage:     "\n	-e,--encrypted	Supplied passwords are in encrypted form"
+//usage:     "\n	-m,--md5	Use MD5 encryption instead of DES"
+//usage:	)
+//usage:	IF_NOT_LONG_OPTS(
+//usage:     "\n	-e	Supplied passwords are in encrypted form"
+//usage:     "\n	-m	Use MD5 encryption instead of DES"
+//usage:	)
+
 #if ENABLE_LONG_OPTS
 static const char chpasswd_longopts[] ALIGN1 =
 	"encrypted\0" No_argument "e"
@@ -23,9 +36,8 @@ int chpasswd_main(int argc UNUSED_PARAM, char **argv)
 	char *name, *pass;
 	char salt[sizeof("$N$XXXXXXXX")];
 	int opt, rc;
-	int rnd = rnd; /* we *want* it to be non-initialized! */
 
-	if (getuid())
+	if (getuid() != 0)
 		bb_error_msg_and_die(bb_msg_perm_denied_are_you_root);
 
 	opt_complementary = "m--e:e--m";
@@ -41,10 +53,12 @@ int chpasswd_main(int argc UNUSED_PARAM, char **argv)
 		xuname2uid(name); /* dies if there is no such user */
 
 		if (!(opt & OPT_ENC)) {
-			rnd = crypt_make_salt(salt, 1, rnd);
+			crypt_make_salt(salt, 1);
 			if (opt & OPT_MD5) {
-				strcpy(salt, "$1$");
-				rnd = crypt_make_salt(salt + 3, 4, rnd);
+				salt[0] = '$';
+				salt[1] = '1';
+				salt[2] = '$';
+				crypt_make_salt(salt + 3, 4);
 			}
 			pass = pw_encrypt(pass, salt, 0);
 		}
@@ -53,7 +67,10 @@ int chpasswd_main(int argc UNUSED_PARAM, char **argv)
 		 * we try to find & change his passwd in /etc/passwd */
 #if ENABLE_FEATURE_SHADOWPASSWDS
 		rc = update_passwd(bb_path_shadow_file, name, pass, NULL);
-		if (rc == 0) /* no lines updated, no errors detected */
+		if (rc > 0) /* password in /etc/shadow was updated */
+			pass = (char*)"x";
+		if (rc >= 0)
+			/* 0 = /etc/shadow missing (not an error), >0 = passwd changed in /etc/shadow */
 #endif
 			rc = update_passwd(bb_path_passwd_file, name, pass, NULL);
 		/* LOGMODE_BOTH logs to syslog also */

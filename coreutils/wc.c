@@ -64,7 +64,6 @@
 //usage:
 //usage:#define wc_full_usage "\n\n"
 //usage:       "Count lines, words, and bytes for each FILE (or stdin)\n"
-//usage:     "\nOptions:"
 //usage:     "\n	-c	Count bytes"
 //usage:	IF_UNICODE_SUPPORT(
 //usage:     "\n	-m	Count characters"
@@ -81,11 +80,11 @@
  * column order in "wc -cmlwL" output:
  */
 enum {
-	WC_LINES    = 0,
-	WC_WORDS    = 1,
-	WC_UNICHARS = 2,
-	WC_CHARS    = 3,
-	WC_LENGTH   = 4,
+	WC_LINES    = 0, /* -l */
+	WC_WORDS    = 1, /* -w */
+	WC_UNICHARS = 2, /* -m */
+	WC_BYTES    = 3, /* -c */
+	WC_LENGTH   = 4, /* -L */
 	NUM_WCS     = 5,
 };
 
@@ -104,10 +103,10 @@ int wc_main(int argc UNUSED_PARAM, char **argv)
 
 	init_unicode();
 
-	print_type = getopt32(argv, "lwcmL");
+	print_type = getopt32(argv, "lwmcL");
 
 	if (print_type == 0) {
-		print_type = (1 << WC_LINES) | (1 << WC_WORDS) | (1 << WC_CHARS);
+		print_type = (1 << WC_LINES) | (1 << WC_WORDS) | (1 << WC_BYTES);
 	}
 
 	argv += optind;
@@ -157,7 +156,7 @@ int wc_main(int argc UNUSED_PARAM, char **argv)
 			}
 
 			/* Cater for -c and -m */
-			++counts[WC_CHARS];
+			++counts[WC_BYTES];
 			if (unicode_status != UNICODE_ON /* every byte is a new char */
 			 || (c & 0xc0) != 0x80 /* it isn't a 2nd+ byte of a Unicode char */
 			) {

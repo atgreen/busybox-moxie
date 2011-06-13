@@ -181,12 +181,23 @@ config GETTY
 	default y
 	select FEATURE_SYSLOG
 	help
-	  getty lets you log in on a tty, it is normally invoked by init.
+	  getty lets you log in on a tty. It is normally invoked by init.
+
+	  Note that you can save a few bytes by disabling it and
+	  using login applet directly.
+	  If you need to reset tty attributes before calling login,
+	  this script approximates getty:
+
+	  exec </dev/$1 >/dev/$1 2>&1 || exit 1
+	  reset
+	  stty sane; stty ispeed 38400; stty ospeed 38400
+	  printf "%s login: " "`hostname`"
+	  read -r login
+	  exec /bin/login "$login"
 
 config LOGIN
 	bool "login"
 	default y
-	select FEATURE_SUID
 	select FEATURE_SYSLOG
 	help
 	  login is used when signing onto a system.
@@ -229,7 +240,6 @@ config FEATURE_SECURETTY
 config PASSWD
 	bool "passwd"
 	default y
-	select FEATURE_SUID
 	select FEATURE_SYSLOG
 	help
 	  passwd changes passwords for user and group accounts. A normal user
@@ -265,7 +275,6 @@ config CHPASSWD
 config SU
 	bool "su"
 	default y
-	select FEATURE_SUID
 	select FEATURE_SYSLOG
 	help
 	  su is used to become another user during a login session.
@@ -295,7 +304,6 @@ config SULOGIN
 config VLOCK
 	bool "vlock"
 	default y
-	select FEATURE_SUID
 	help
 	  Build the "vlock" applet which allows you to lock (virtual) terminals.
 

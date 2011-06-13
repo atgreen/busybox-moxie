@@ -295,11 +295,11 @@ config FEATURE_INSTALL_LONG_OPTIONS
 	help
 	  Support long options for the install applet.
 
-config LENGTH
-	bool "length"
-	default y
-	help
-	  length is used to print out the length of a specified string.
+####config LENGTH
+####	bool "length"
+####	default y
+####	help
+####	  length is used to print out the length of a specified string.
 
 config LN
 	bool "ln"
@@ -591,7 +591,7 @@ config FEATURE_SPLIT_FANCY
 config STAT
 	bool "stat"
 	default y
-	depends on PLATFORM_LINUX # statfs()
+	select PLATFORM_LINUX # statfs()
 	help
 	  display file or filesystem status.
 
@@ -660,13 +660,6 @@ config FEATURE_TEE_USE_BLOCK_IO
 	depends on TEE
 	help
 	  Enable this option for a faster tee, at expense of size.
-
-config TOUCH
-	bool "touch"
-	default y
-	help
-	  touch is used to create or change the access and/or
-	  modification timestamp of specified files.
 
 config TRUE
 	bool "true"

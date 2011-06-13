@@ -42,9 +42,9 @@ int FAST_FUNC vasprintf(char **string_ptr, const char *format, va_list p)
 }
 #endif
 
-#ifndef HAVE_FDPRINTF
-/* dprintf is now actually part of POSIX.1, but was only added in 2008 */
-int fdprintf(int fd, const char *format, ...)
+#ifndef HAVE_DPRINTF
+/* dprintf is now part of POSIX.1, but was only added in 2008 */
+int dprintf(int fd, const char *format, ...)
 {
 	va_list p;
 	int r;
@@ -132,5 +132,16 @@ char* FAST_FUNC strsep(char **stringp, const char *delim)
 	*stringp = ptr + 1;
 
 	return start;
+}
+#endif
+
+#ifndef HAVE_STPCPY
+char* FAST_FUNC stpcpy(char *p, const char *to_add)
+{
+	while ((*p = *to_add) != '\0') {
+		p++;
+		to_add++;
+	}
+	return p;
 }
 #endif

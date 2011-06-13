@@ -9,8 +9,8 @@
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
 
-//applet:IF_INIT(APPLET(init, _BB_DIR_SBIN, _BB_SUID_DROP))
-//applet:IF_FEATURE_INITRD(APPLET_ODDNAME(linuxrc, init, _BB_DIR_ROOT, _BB_SUID_DROP, linuxrc))
+//applet:IF_INIT(APPLET(init, BB_DIR_SBIN, BB_SUID_DROP))
+//applet:IF_FEATURE_INITRD(APPLET_ODDNAME(linuxrc, init, BB_DIR_ROOT, BB_SUID_DROP, linuxrc))
 
 //kbuild:lib-$(CONFIG_INIT) += init.o
 
@@ -114,9 +114,6 @@
 #include <sys/resource.h>
 #ifdef __linux__
 #include <linux/vt.h>
-#endif
-#if ENABLE_FEATURE_UTMP
-# include <utmp.h> /* DEAD_PROCESS */
 #endif
 #include "reboot.h" /* reboot() constants */
 
@@ -401,20 +398,23 @@ static void init_exec(const char *command)
 	char buf[COMMAND_SIZE + 6];  /* COMMAND_SIZE+strlen("exec ")+1 */
 	int dash = (command[0] == '-' /* maybe? && command[1] == '/' */);
 
+	command += dash;
+
 	/* See if any special /bin/sh requiring characters are present */
 	if (strpbrk(command, "~`!$^&*()=|\\{}[];\"'<>?") != NULL) {
-		strcpy(buf, "exec ");
-		strcpy(buf + 5, command + dash); /* excluding "-" */
+		sprintf(buf, "exec %s", command); /* excluding "-" */
 		/* NB: LIBBB_DEFAULT_LOGIN_SHELL define has leading dash */
 		cmd[0] = (char*)(LIBBB_DEFAULT_LOGIN_SHELL + !dash);
 		cmd[1] = (char*)"-c";
 		cmd[2] = buf;
 		cmd[3] = NULL;
+		command = LIBBB_DEFAULT_LOGIN_SHELL + 1;
 	} else {
 		/* Convert command (char*) into cmd (char**, one word per string) */
 		char *word, *next;
 		int i = 0;
-		next = strcpy(buf, command); /* including "-" */
+		next = strcpy(buf, command - dash); /* command including "-" */
+		command = next + dash;
 		while ((word = strsep(&next, " \t")) != NULL) {
 			if (*word != '\0') { /* not two spaces/tabs together? */
 				cmd[i] = word;
@@ -425,14 +425,14 @@ static void init_exec(const char *command)
 	}
 	/* If we saw leading "-", it is interactive shell.
 	 * Try harder to give it a controlling tty.
-	 * And skip "-" in actual exec call. */
-	if (dash) {
+	 */
+	if (ENABLE_FEATURE_INIT_SCTTY && dash) {
 		/* _Attempt_ to make stdin a controlling tty. */
-		if (ENABLE_FEATURE_INIT_SCTTY)
-			ioctl(STDIN_FILENO, TIOCSCTTY, 0 /*only try, don't steal*/);
+		ioctl(STDIN_FILENO, TIOCSCTTY, 0 /*only try, don't steal*/);
 	}
-	BB_EXECVP(cmd[0] + dash, cmd);
-	message(L_LOG | L_CONSOLE, "can't run '%s': %s", cmd[0], strerror(errno));
+	/* Here command never contains the dash, cmd[0] might */
+	BB_EXECVP(command, cmd);
+	message(L_LOG | L_CONSOLE, "can't run '%s': %s", command, strerror(errno));
 	/* returns if execvp fails */
 }
 

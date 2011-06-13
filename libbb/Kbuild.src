@@ -13,7 +13,6 @@ INSERT
 lib-y += appletlib.o
 lib-y += ask_confirmation.o
 lib-y += bb_askpass.o
-lib-y += bb_basename.o
 lib-y += bb_bswap_64.o
 lib-y += bb_do_delay.o
 lib-y += bb_pwd.o
@@ -59,13 +58,11 @@ lib-y += llist.o
 lib-y += login.o
 lib-y += make_directory.o
 lib-y += makedev.o
-lib-y += match_fstype.o
 lib-y += hash_md5_sha.o
 # Alternative (disabled) MD5 implementation
 #lib-y += hash_md5prime.o
 lib-y += messages.o
 lib-y += mode_string.o
-lib-y += obscure.o
 lib-y += parse_mode.o
 lib-y += parse_config.o
 lib-y += perror_msg.o
@@ -120,6 +117,8 @@ lib-y += xgethostbyname.o
 lib-y += xreadlink.o
 lib-y += xrealloc_vector.o
 
+lib-$(CONFIG_PLATFORM_LINUX) += match_fstype.o
+
 lib-$(CONFIG_FEATURE_UTMP) += utmp.o
 
 # A mix of optimizations (why build stuff we know won't be used)
@@ -137,7 +136,7 @@ lib-$(CONFIG_ADDUSER) += update_passwd.o
 lib-$(CONFIG_DELGROUP) += update_passwd.o
 lib-$(CONFIG_DELUSER) += update_passwd.o
 
-lib-$(CONFIG_PASSWD) += pw_encrypt.o update_passwd.o
+lib-$(CONFIG_PASSWD) += pw_encrypt.o update_passwd.o obscure.o
 lib-$(CONFIG_CHPASSWD) += pw_encrypt.o update_passwd.o
 lib-$(CONFIG_CRYPTPW) += pw_encrypt.o
 lib-$(CONFIG_SULOGIN) += pw_encrypt.o

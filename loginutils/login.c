@@ -2,11 +2,17 @@
 /*
  * Licensed under GPLv2 or later, see file LICENSE in this source tree.
  */
+
+//usage:#define login_trivial_usage
+//usage:       "[-p] [-h HOST] [[-f] USER]"
+//usage:#define login_full_usage "\n\n"
+//usage:       "Begin a new session on the system\n"
+//usage:     "\n	-f	Don't authenticate (user already authenticated)"
+//usage:     "\n	-h	Name of the remote host"
+//usage:     "\n	-p	Preserve environment"
+
 #include "libbb.h"
 #include <syslog.h>
-#if ENABLE_FEATURE_UTMP
-# include <utmp.h> /* USER_PROCESS */
-#endif
 #include <sys/resource.h>
 
 #if ENABLE_SELINUX
@@ -201,7 +207,6 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 	};
 	char *fromhost;
 	char username[USERNAME_SIZE];
-	const char *shell;
 	int run_by_root;
 	unsigned opt;
 	int count = 0;
@@ -217,6 +222,7 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 	const char *failed_msg;
 	struct passwd pwdstruct;
 	char pwdbuf[256];
+	char **pamenv;
 #endif
 
 	username[0] = '\0';
@@ -280,6 +286,14 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 		if (pamret != PAM_SUCCESS) {
 			failed_msg = "set_item(TTY)";
 			goto pam_auth_failed;
+		}
+		/* set RHOST */
+		if (opt_host) {
+			pamret = pam_set_item(pamh, PAM_RHOST, opt_host);
+			if (pamret != PAM_SUCCESS) {
+				failed_msg = "set_item(RHOST)";
+				goto pam_auth_failed;
+			}
 		}
 		pamret = pam_authenticate(pamh, 0);
 		if (pamret != PAM_SUCCESS) {
@@ -358,7 +372,7 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 #endif /* ENABLE_PAM */
  auth_failed:
 		opt &= ~LOGIN_OPT_f;
-		bb_do_delay(FAIL_DELAY);
+		bb_do_delay(LOGIN_FAIL_DELAY);
 		/* TODO: doesn't sound like correct English phrase to me */
 		puts("Login incorrect");
 		if (++count == 3) {
@@ -393,12 +407,19 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 		run_login_script(pw, full_tty);
 
 	change_identity(pw);
-	shell = pw->pw_shell;
-	if (!shell || !shell[0])
-		shell = DEFAULT_SHELL;
-	setup_environment(shell,
+	setup_environment(pw->pw_shell,
 			(!(opt & LOGIN_OPT_p) * SETUP_ENV_CLEARENV) + SETUP_ENV_CHANGEENV,
 			pw);
+
+#if ENABLE_PAM
+	/* Modules such as pam_env will setup the PAM environment,
+	 * which should be copied into the new environment. */
+	pamenv = pam_getenvlist(pamh);
+	if (pamenv) while (*pamenv) {
+		putenv(*pamenv);
+		pamenv++;
+	}
+#endif
 
 	motd();
 
@@ -434,7 +455,7 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 	signal(SIGINT, SIG_DFL);
 
 	/* Exec login shell with no additional parameters */
-	run_shell(shell, 1, NULL, NULL);
+	run_shell(pw->pw_shell, 1, NULL, NULL);
 
 	/* return EXIT_FAILURE; - not reached */
 }
