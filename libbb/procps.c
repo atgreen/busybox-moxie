@@ -284,27 +284,25 @@ int FAST_FUNC procps_read_smaps(pid_t pid, struct smaprec *total,
 void BUG_comm_size(void);
 procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 {
-	struct dirent *entry;
-	char buf[PROCPS_BUFSIZE];
-	char filename[sizeof("/proc//cmdline") + sizeof(int)*3];
-	char *filename_tail;
-	long tasknice;
-	unsigned pid;
-	int n;
-	struct stat sb;
-
 	if (!sp)
 		sp = alloc_procps_scan();
 
 	for (;;) {
+		struct dirent *entry;
+		char buf[PROCPS_BUFSIZE];
+		long tasknice;
+		unsigned pid;
+		int n;
+		char filename[sizeof("/proc/%u/task/%u/cmdline") + sizeof(int)*3 * 2];
+		char *filename_tail;
+
 #if ENABLE_FEATURE_SHOW_THREADS
-		if ((flags & PSSCAN_TASKS) && sp->task_dir) {
+		if (sp->task_dir) {
 			entry = readdir(sp->task_dir);
 			if (entry)
 				goto got_entry;
 			closedir(sp->task_dir);
 			sp->task_dir = NULL;
-			sp->main_thread_pid = 0;
 		}
 #endif
 		entry = readdir(sp->dir);
@@ -321,9 +319,9 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 			/* We found another /proc/PID. Do not use it,
 			 * there will be /proc/PID/task/PID (same PID!),
 			 * so just go ahead and dive into /proc/PID/task. */
-			char task_dir[sizeof("/proc/%u/task") + sizeof(int)*3];
-			sprintf(task_dir, "/proc/%u/task", pid);
-			sp->task_dir = xopendir(task_dir);
+			sprintf(filename, "/proc/%u/task", pid);
+			/* Note: if opendir fails, we just go to next /proc/XXX */
+			sp->task_dir = opendir(filename);
 			sp->main_thread_pid = pid;
 			continue;
 		}
@@ -347,9 +345,15 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 		}
 #endif
 
-		filename_tail = filename + sprintf(filename, "/proc/%u/", pid);
+#if ENABLE_FEATURE_SHOW_THREADS
+		if (sp->task_dir)
+			filename_tail = filename + sprintf(filename, "/proc/%u/task/%u/", sp->main_thread_pid, pid);
+		else
+#endif
+			filename_tail = filename + sprintf(filename, "/proc/%u/", pid);
 
 		if (flags & PSSCAN_UIDGID) {
+			struct stat sb;
 			if (stat(filename, &sb))
 				continue; /* process probably exited */
 			/* Effective UID/GID, not real */
@@ -357,7 +361,14 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 			sp->gid = sb.st_gid;
 		}
 
-		if (flags & PSSCAN_STAT) {
+		/* These are all retrieved from proc/NN/stat in one go: */
+		if (flags & (PSSCAN_PPID | PSSCAN_PGID | PSSCAN_SID
+			| PSSCAN_COMM | PSSCAN_STATE
+			| PSSCAN_VSZ | PSSCAN_RSS
+			| PSSCAN_STIME | PSSCAN_UTIME | PSSCAN_START_TIME
+			| PSSCAN_TTY | PSSCAN_NICE
+			| PSSCAN_CPU)
+		) {
 			char *cp, *comm1;
 			int tty;
 #if !ENABLE_FEATURE_FAST_TOP
@@ -559,18 +570,47 @@ procps_status_t* FAST_FUNC procps_scan(procps_status_t* sp, int flags)
 void FAST_FUNC read_cmdline(char *buf, int col, unsigned pid, const char *comm)
 {
 	int sz;
-	char filename[sizeof("/proc//cmdline") + sizeof(int)*3];
+	char filename[sizeof("/proc/%u/cmdline") + sizeof(int)*3];
 
 	sprintf(filename, "/proc/%u/cmdline", pid);
 	sz = open_read_close(filename, buf, col - 1);
 	if (sz > 0) {
+		const char *base;
+		int comm_len;
+
 		buf[sz] = '\0';
 		while (--sz >= 0 && buf[sz] == '\0')
 			continue;
-		do {
+		base = bb_basename(buf); /* before we replace argv0's NUL with space */
+		while (sz >= 0) {
 			if ((unsigned char)(buf[sz]) < ' ')
 				buf[sz] = ' ';
-		} while (--sz >= 0);
+			sz--;
+		}
+
+		/* If comm differs from argv0, prepend "{comm} ".
+		 * It allows to see thread names set by prctl(PR_SET_NAME).
+		 */
+		if (base[0] == '-') /* "-sh" (login shell)? */
+			base++;
+		comm_len = strlen(comm);
+		/* Why compare up to comm_len, not COMM_LEN-1?
+		 * Well, some processes rewrite argv, and use _spaces_ there
+		 * while rewriting. (KDE is observed to do it).
+		 * I prefer to still treat argv0 "process foo bar"
+		 * as 'equal' to comm "process".
+		 */
+		if (strncmp(base, comm, comm_len) != 0) {
+			comm_len += 3;
+			if (col > comm_len)
+				memmove(buf + comm_len, buf, col - comm_len);
+			snprintf(buf, col, "{%s}", comm);
+			if (col <= comm_len)
+				return;
+			buf[comm_len - 1] = ' ';
+			buf[col - 1] = '\0';
+		}
+
 	} else {
 		snprintf(buf, col, "[%s]", comm);
 	}

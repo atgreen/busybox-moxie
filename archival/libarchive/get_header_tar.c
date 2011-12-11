@@ -12,7 +12,7 @@
  */
 
 #include "libbb.h"
-#include "archive.h"
+#include "bb_archive.h"
 
 typedef uint32_t aliased_uint32_t FIX_ALIASING;
 typedef off_t    aliased_off_t    FIX_ALIASING;
@@ -79,10 +79,10 @@ static unsigned long long getOctal(char *str, int len)
 		 *
 		 * NB: tarballs with NEGATIVE unix times encoded that way were seen!
 		 */
-		v = first;
-		/* Sign-extend using 6th bit: */
-		v <<= sizeof(unsigned long long)*8 - 7;
-		v = (long long)v >> (sizeof(unsigned long long)*8 - 7);
+		/* Sign-extend 7bit 'first' to 64bit 'v' (that is, using 6th bit as sign): */
+		first <<= 1;
+		first >>= 1; /* now 7th bit = 6th bit */
+		v = first;   /* sign-extend 8 bits to 64 */
 		while (--len != 0)
 			v = (v << 8) + (unsigned char) *str++;
 	}
@@ -348,10 +348,20 @@ char FAST_FUNC get_header_tar(archive_handle_t *archive_handle)
 	/* Set bits 12-15 of the files mode */
 	/* (typeflag was not trashed because chksum does not use getOctal) */
 	switch (tar.typeflag) {
-	/* busybox identifies hard links as being regular files with 0 size and a link name */
-	case '1':
+	case '1': /* hardlink */
+		/* we mark hardlinks as regular files with zero size and a link name */
 		file_header->mode |= S_IFREG;
-		break;
+		/* on size of link fields from star(4)
+		 * ... For tar archives written by pre POSIX.1-1988
+		 * implementations, the size field usually contains the size of
+		 * the file and needs to be ignored as no data may follow this
+		 * header type.  For POSIX.1- 1988 compliant archives, the size
+		 * field needs to be 0.  For POSIX.1-2001 compliant archives,
+		 * the size field may be non zero, indicating that file data is
+		 * included in the archive.
+		 * i.e; always assume this is zero for safety.
+		 */
+		goto size0;
 	case '7':
 	/* case 0: */
 	case '0':

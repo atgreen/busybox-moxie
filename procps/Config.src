@@ -90,11 +90,19 @@ config PS
 config FEATURE_PS_WIDE
 	bool "Enable wide output option (-w)"
 	default y
-	depends on PS
+	depends on PS && !DESKTOP
 	help
 	  Support argument 'w' for wide output.
 	  If given once, 132 chars are printed, and if given more
 	  than once, the length is unlimited.
+
+config FEATURE_PS_LONG
+	bool "Enable long output option (-l)"
+	default y
+	depends on PS && !DESKTOP
+	help
+	  Support argument 'l' for long output.
+	  Adds fields PPID, RSS, START, TIME & TTY
 
 config FEATURE_PS_TIME
 	bool "Enable time and elapsed time output"
@@ -193,15 +201,6 @@ config FEATURE_SHOW_THREADS
 	help
 	  Enables the ps -T option, showing of threads in pstree,
 	  and 'h' command in top.
-
-config UPTIME
-	bool "uptime"
-	default y
-	select PLATFORM_LINUX #sysinfo()
-	help
-	  uptime gives a one line display of the current time, how long
-	  the system has been running, how many users are currently logged
-	  on, and the system load averages for the past 1, 5, and 15 minutes.
 
 config WATCH
 	bool "watch"

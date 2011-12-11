@@ -29,6 +29,22 @@
 #include <netinet/ip_icmp.h>
 #include "libbb.h"
 
+#ifdef __BIONIC__
+/* should be in netinet/ip_icmp.h */
+# define ICMP_DEST_UNREACH    3  /* Destination Unreachable  */
+# define ICMP_SOURCE_QUENCH   4  /* Source Quench    */
+# define ICMP_REDIRECT        5  /* Redirect (change route)  */
+# define ICMP_ECHO            8  /* Echo Request      */
+# define ICMP_TIME_EXCEEDED  11  /* Time Exceeded    */
+# define ICMP_PARAMETERPROB  12  /* Parameter Problem    */
+# define ICMP_TIMESTAMP      13  /* Timestamp Request    */
+# define ICMP_TIMESTAMPREPLY 14  /* Timestamp Reply    */
+# define ICMP_INFO_REQUEST   15  /* Information Request    */
+# define ICMP_INFO_REPLY     16  /* Information Reply    */
+# define ICMP_ADDRESS        17  /* Address Mask Request    */
+# define ICMP_ADDRESSREPLY   18  /* Address Mask Reply    */
+#endif
+
 //config:config PING
 //config:	bool "ping"
 //config:	default y
@@ -133,31 +149,6 @@ enum {
 	PINGINTERVAL = 1, /* 1 second */
 };
 
-/* Common routines */
-
-static int in_cksum(unsigned short *buf, int sz)
-{
-	int nleft = sz;
-	int sum = 0;
-	unsigned short *w = buf;
-	unsigned short ans = 0;
-
-	while (nleft > 1) {
-		sum += *w++;
-		nleft -= 2;
-	}
-
-	if (nleft == 1) {
-		*(unsigned char *) (&ans) = *(unsigned char *) w;
-		sum += ans;
-	}
-
-	sum = (sum >> 16) + (sum & 0xFFFF);
-	sum += (sum >> 16);
-	ans = ~sum;
-	return ans;
-}
-
 #if !ENABLE_FEATURE_FANCY_PING
 
 /* Simple version */
@@ -185,7 +176,7 @@ static void ping4(len_and_sockaddr *lsa)
 	pkt = (struct icmp *) G.packet;
 	memset(pkt, 0, sizeof(G.packet));
 	pkt->icmp_type = ICMP_ECHO;
-	pkt->icmp_cksum = in_cksum((unsigned short *) pkt, sizeof(G.packet));
+	pkt->icmp_cksum = inet_cksum((uint16_t *) pkt, sizeof(G.packet));
 
 	xsendto(pingsock, G.packet, DEFDATALEN + ICMP_MINLEN, &lsa->u.sa, lsa->len);
 
@@ -477,7 +468,7 @@ static void sendping4(int junk UNUSED_PARAM)
 		/* No hton: we'll read it back on the same machine */
 		*(uint32_t*)&pkt->icmp_dun = monotonic_us();
 
-	pkt->icmp_cksum = in_cksum((unsigned short *) pkt, datalen + ICMP_MINLEN);
+	pkt->icmp_cksum = inet_cksum((uint16_t *) pkt, datalen + ICMP_MINLEN);
 
 	sendping_tail(sendping4, ICMP_MINLEN);
 }
@@ -496,7 +487,7 @@ static void sendping6(int junk UNUSED_PARAM)
 	/*if (datalen >= 4)*/
 		*(uint32_t*)(&pkt->icmp6_data8[4]) = monotonic_us();
 
-	//TODO? pkt->icmp_cksum = in_cksum(...);
+	//TODO? pkt->icmp_cksum = inet_cksum(...);
 
 	sendping_tail(sendping6, sizeof(struct icmp6_hdr));
 }
@@ -622,7 +613,7 @@ static void unpack4(char *buf, int sz, struct sockaddr_in *from)
 	}
 }
 #if ENABLE_PING6
-static void unpack6(char *packet, int sz, /*struct sockaddr_in6 *from,*/ int hoplimit)
+static void unpack6(char *packet, int sz, struct sockaddr_in6 *from, int hoplimit)
 {
 	struct icmp6_hdr *icmppkt;
 	char buf[INET6_ADDRSTRLEN];
@@ -642,7 +633,7 @@ static void unpack6(char *packet, int sz, /*struct sockaddr_in6 *from,*/ int hop
 		if (sz >= sizeof(struct icmp6_hdr) + sizeof(uint32_t))
 			tp = (uint32_t *) &icmppkt->icmp6_data8[4];
 		unpack_tail(sz, tp,
-			inet_ntop(AF_INET6, &pingaddr.sin6.sin6_addr,
+			inet_ntop(AF_INET6, &from->sin6_addr,
 					buf, sizeof(buf)),
 			recv_seq, hoplimit);
 	} else if (icmppkt->icmp6_type != ICMP6_ECHO_REQUEST) {
@@ -792,7 +783,7 @@ static void ping6(len_and_sockaddr *lsa)
 				move_from_unaligned_int(hoplimit, CMSG_DATA(mp));
 			}
 		}
-		unpack6(G.rcv_packet, c, /*&from,*/ hoplimit);
+		unpack6(G.rcv_packet, c, &from, hoplimit);
 		if (pingcount && nreceived >= pingcount)
 			break;
 	}

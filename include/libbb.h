@@ -32,6 +32,11 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <string.h>
+/* There are two incompatible basename's, let not use them! */
+/* See the dirname/basename man page for details */
+#include <libgen.h> /* dirname,basename */
+#undef basename
+#define basename dont_use_basename
 #include <sys/poll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -52,6 +57,12 @@
 #ifdef HAVE_SYS_STATFS_H
 # include <sys/statfs.h>
 #endif
+/* Don't do this here:
+ * #include <sys/sysinfo.h>
+ * Some linux/ includes pull in conflicting definition
+ * of struct sysinfo (only in some toolchanins), which breaks build.
+ * Include sys/sysinfo.h only in those files which need it.
+ */
 #if ENABLE_SELINUX
 # include <selinux/selinux.h>
 # include <selinux/context.h>
@@ -127,36 +138,35 @@ int vdprintf(int d, const char *format, va_list ap);
 #endif
 /* klogctl is in libc's klog.h, but we cheat and not #include that */
 int klogctl(int type, char *b, int len);
-/* This is declared here rather than #including <libgen.h> in order to avoid
- * confusing the two versions of basename.  See the dirname/basename man page
- * for details. */
-#if !defined __FreeBSD__
-char *dirname(char *path);
-#endif
-/* Include our own copy of struct sysinfo to avoid binary compatibility
- * problems with Linux 2.4, which changed things.  Grumble, grumble. */
-struct sysinfo {
-	long uptime;			/* Seconds since boot */
-	unsigned long loads[3];		/* 1, 5, and 15 minute load averages */
-	unsigned long totalram;		/* Total usable main memory size */
-	unsigned long freeram;		/* Available memory size */
-	unsigned long sharedram;	/* Amount of shared memory */
-	unsigned long bufferram;	/* Memory used by buffers */
-	unsigned long totalswap;	/* Total swap space size */
-	unsigned long freeswap;		/* swap space still available */
-	unsigned short procs;		/* Number of current processes */
-	unsigned short pad;			/* Padding needed for m68k */
-	unsigned long totalhigh;	/* Total high memory size */
-	unsigned long freehigh;		/* Available high memory size */
-	unsigned int mem_unit;		/* Memory unit size in bytes */
-	char _f[20 - 2 * sizeof(long) - sizeof(int)]; /* Padding: libc5 uses this.. */
-};
-int sysinfo(struct sysinfo* info);
 #ifndef PATH_MAX
 # define PATH_MAX 256
 #endif
 #ifndef BUFSIZ
 # define BUFSIZ 4096
+#endif
+
+
+/* Busybox does not use threads, we can speed up stdio. */
+#ifdef HAVE_UNLOCKED_STDIO
+# undef  getc
+# define getc(stream) getc_unlocked(stream)
+# undef  getchar
+# define getchar() getchar_unlocked()
+# undef  putc
+# define putc(c, stream) putc_unlocked(c, stream)
+# undef  putchar
+# define putchar(c) putchar_unlocked(c)
+# undef  fgetc
+# define fgetc(stream) getc_unlocked(stream)
+# undef  fputc
+# define fputc(c, stream) putc_unlocked(c, stream)
+#endif
+/* Above functions are required by POSIX.1-2008, below ones are extensions */
+#ifdef HAVE_UNLOCKED_LINE_OPS
+# undef  fgets
+# define fgets(s, n, stream) fgets_unlocked(s, n, stream)
+# undef  fputs
+# define fputs(s, stream) fputs_unlocked(s, stream)
 #endif
 
 
@@ -201,7 +211,7 @@ PUSH_AND_SET_FUNCTION_VISIBILITY_TO_HIDDEN
 # if ULONG_MAX > 0xffffffff
 /* "long" is long enough on this system */
 typedef unsigned long uoff_t;
-#  define XATOOFF(a) xatoul_range(a, 0, LONG_MAX)
+#  define XATOOFF(a) xatoul_range((a), 0, LONG_MAX)
 /* usage: sz = BB_STRTOOFF(s, NULL, 10); if (errno || sz < 0) die(); */
 #  define BB_STRTOOFF bb_strtoul
 #  define STRTOOFF strtoul
@@ -210,7 +220,7 @@ typedef unsigned long uoff_t;
 # else
 /* "long" is too short, need "long long" */
 typedef unsigned long long uoff_t;
-#  define XATOOFF(a) xatoull_range(a, 0, LLONG_MAX)
+#  define XATOOFF(a) xatoull_range((a), 0, LLONG_MAX)
 #  define BB_STRTOOFF bb_strtoull
 #  define STRTOOFF strtoull
 #  define OFF_FMT "ll"
@@ -227,7 +237,7 @@ typedef unsigned long uoff_t;
 #  define OFF_FMT "l"
 # else
 typedef unsigned long uoff_t;
-#  define XATOOFF(a) xatoul_range(a, 0, LONG_MAX)
+#  define XATOOFF(a) xatoul_range((a), 0, LONG_MAX)
 #  define BB_STRTOOFF bb_strtoul
 #  define STRTOOFF strtol
 #  define OFF_FMT "l"
@@ -235,6 +245,12 @@ typedef unsigned long uoff_t;
 #endif
 /* scary. better ideas? (but do *test* them first!) */
 #define OFF_T_MAX  ((off_t)~((off_t)1 << (sizeof(off_t)*8-1)))
+/* Users report bionic to use 32-bit off_t even if LARGEFILE support is requested.
+ * We misdetected that. Don't let it build:
+ */
+struct BUG_off_t_size_is_misdetected {
+	char BUG_off_t_size_is_misdetected[sizeof(off_t) == sizeof(uoff_t) ? 1 : -1];
+};
 
 /* Some useful definitions */
 #undef FALSE
@@ -243,13 +259,6 @@ typedef unsigned long uoff_t;
 #define TRUE    ((int) 1)
 #undef SKIP
 #define SKIP	((int) 2)
-
-/* for mtab.c */
-#define MTAB_GETMOUNTPT '1'
-#define MTAB_GETDEVICE  '2'
-
-#define BUF_SIZE        8192
-#define EXPAND_ALLOC    1024
 
 /* Macros for min/max.  */
 #ifndef MIN
@@ -629,6 +638,7 @@ ssize_t recv_from_to(int fd, void *buf, size_t len, int flags,
 		struct sockaddr *to,
 		socklen_t sa_size) FAST_FUNC;
 
+uint16_t inet_cksum(uint16_t *addr, int len) FAST_FUNC;
 
 char *xstrdup(const char *s) FAST_FUNC RETURNS_MALLOC;
 char *xstrndup(const char *s, int n) FAST_FUNC RETURNS_MALLOC;
@@ -673,10 +683,13 @@ void *malloc_or_warn(size_t size) FAST_FUNC RETURNS_MALLOC;
 void *xmalloc(size_t size) FAST_FUNC RETURNS_MALLOC;
 void *xzalloc(size_t size) FAST_FUNC RETURNS_MALLOC;
 void *xrealloc(void *old, size_t size) FAST_FUNC;
-/* After xrealloc_vector(v, 4, idx) it's ok to use
+/* After v = xrealloc_vector(v, SHIFT, idx) it's ok to use
  * at least v[idx] and v[idx+1], for all idx values.
- * shift specifies how many new elements are added (1: 2, 2: 4... 8: 256...)
- * when all elements are used up. New elements are zeroed out. */
+ * SHIFT specifies how many new elements are added (1:2, 2:4, ..., 8:256...)
+ * when all elements are used up. New elements are zeroed out.
+ * xrealloc_vector(v, SHIFT, idx) *MUST* be called with consecutive IDXs -
+ * skipping an index is a bad bug - it may miss a realloc!
+ */
 #define xrealloc_vector(vector, shift, idx) \
 	xrealloc_vector_helper((vector), (sizeof((vector)[0]) << 8) + (shift), (idx))
 void* xrealloc_vector_helper(void *vector, unsigned sizeof_and_shift, int idx) FAST_FUNC;
@@ -730,8 +743,12 @@ extern void xclose(int fd) FAST_FUNC;
 /* Reads and prints to stdout till eof, then closes FILE. Exits on error: */
 extern void xprint_and_close_file(FILE *file) FAST_FUNC;
 
+/* Reads a line from a text file, up to a newline or NUL byte, inclusive.
+ * Returns malloc'ed char*. If end is NULL '\n' isn't considered
+ * end of line. If end isn't NULL, length of the chunk is stored in it.
+ * Returns NULL if EOF/error.
+ */
 extern char *bb_get_chunk_from_file(FILE *file, int *end) FAST_FUNC;
-extern char *bb_get_chunk_with_continuation(FILE *file, int *end, int *lineno) FAST_FUNC;
 /* Reads up to (and including) TERMINATING_STRING: */
 extern char *xmalloc_fgets_str(FILE *file, const char *terminating_string) FAST_FUNC RETURNS_MALLOC;
 /* Same, with limited max size, and returns the length (excluding NUL): */
@@ -796,9 +813,9 @@ void smart_ulltoa5(unsigned long long ul, char buf[5], const char *scale) FAST_F
 const char *make_human_readable_str(unsigned long long size,
 		unsigned long block_size, unsigned long display_unit) FAST_FUNC;
 /* Put a string of hex bytes ("1b2e66fe"...), return advanced pointer */
-char *bin2hex(char *buf, const char *cp, int count) FAST_FUNC;
+char *bin2hex(char *dst, const char *src, int count) FAST_FUNC;
 /* Reverse */
-char* hex2bin(char *dst, const char *str, int count) FAST_FUNC;
+char* hex2bin(char *dst, const char *src, int count) FAST_FUNC;
 
 /* Generate a UUID */
 void generate_uuid(uint8_t *buf) FAST_FUNC;
@@ -955,6 +972,7 @@ enum {
 	DAEMON_DEVNULL_STDIO = 2,
 	DAEMON_CLOSE_EXTRA_FDS = 4,
 	DAEMON_ONLY_SANITIZE = 8, /* internal use */
+	DAEMON_DOUBLE_FORK = 16, /* double fork to avoid controlling tty */
 };
 #if BB_MMU
   enum { re_execed = 0 };
@@ -963,6 +981,9 @@ enum {
 # define bb_daemonize(flags)                bb_daemonize_or_rexec(flags, bogus)
 #else
   extern bool re_execed;
+  /* Note: re_exec() and fork_or_rexec() do argv[0][0] |= 0x80 on NOMMU!
+   * _Parent_ needs to undo it if it doesn't want to have argv[0] mangled.
+   */
   void re_exec(char **argv) NORETURN FAST_FUNC;
   pid_t fork_or_rexec(char **argv) FAST_FUNC;
   int  BUG_fork_is_unavailable_on_nommu(void) FAST_FUNC;
@@ -1149,7 +1170,7 @@ extern int del_loop(const char *device) FAST_FUNC;
 /* If *devname is not NULL, use that name, otherwise try to find free one,
  * malloc and return it in *devname.
  * return value: 1: read-only loopdev was setup, 0: rw, < 0: error */
-extern int set_loop(char **devname, const char *file, unsigned long long offset) FAST_FUNC;
+extern int set_loop(char **devname, const char *file, unsigned long long offset, int ro) FAST_FUNC;
 
 /* Like bb_ask below, but asks on stdin with no timeout.  */
 char *bb_ask_stdin(const char * prompt) FAST_FUNC;
@@ -1180,8 +1201,9 @@ enum {
 };
 typedef struct parser_t {
 	FILE *fp;
-	char *line;
 	char *data;
+	char *line, *nline;
+	size_t line_alloc, nline_alloc;
 	int lineno;
 } parser_t;
 parser_t* config_open(const char *filename) FAST_FUNC;
@@ -1346,25 +1368,37 @@ enum {
 	KEYCODE_DELETE   =  -9,
 	KEYCODE_PAGEUP   = -10,
 	KEYCODE_PAGEDOWN = -11,
-
-	KEYCODE_CTRL_UP    = KEYCODE_UP    & ~0x40,
-	KEYCODE_CTRL_DOWN  = KEYCODE_DOWN  & ~0x40,
+	// -12 is reserved for Alt/Ctrl/Shift-TAB
+#if 0
+	KEYCODE_FUN1     = -13,
+	KEYCODE_FUN2     = -14,
+	KEYCODE_FUN3     = -15,
+	KEYCODE_FUN4     = -16,
+	KEYCODE_FUN5     = -17,
+	KEYCODE_FUN6     = -18,
+	KEYCODE_FUN7     = -19,
+	KEYCODE_FUN8     = -20,
+	KEYCODE_FUN9     = -21,
+	KEYCODE_FUN10    = -22,
+	KEYCODE_FUN11    = -23,
+	KEYCODE_FUN12    = -24,
+#endif
+	/* Be sure that last defined value is small enough
+	 * to not interfere with Alt/Ctrl/Shift bits.
+	 * So far we do not exceed -31 (0xfff..fffe1),
+	 * which gives us three upper bits in LSB to play with.
+	 */
+	//KEYCODE_SHIFT_TAB  = (-12)         & ~0x80,
+	//KEYCODE_SHIFT_...  = KEYCODE_...   & ~0x80,
+	//KEYCODE_CTRL_UP    = KEYCODE_UP    & ~0x40,
+	//KEYCODE_CTRL_DOWN  = KEYCODE_DOWN  & ~0x40,
 	KEYCODE_CTRL_RIGHT = KEYCODE_RIGHT & ~0x40,
 	KEYCODE_CTRL_LEFT  = KEYCODE_LEFT  & ~0x40,
-#if 0
-	KEYCODE_FUN1     = -12,
-	KEYCODE_FUN2     = -13,
-	KEYCODE_FUN3     = -14,
-	KEYCODE_FUN4     = -15,
-	KEYCODE_FUN5     = -16,
-	KEYCODE_FUN6     = -17,
-	KEYCODE_FUN7     = -18,
-	KEYCODE_FUN8     = -19,
-	KEYCODE_FUN9     = -20,
-	KEYCODE_FUN10    = -21,
-	KEYCODE_FUN11    = -22,
-	KEYCODE_FUN12    = -23,
-#endif
+	//KEYCODE_ALT_UP     = KEYCODE_UP    & ~0x20,
+	//KEYCODE_ALT_DOWN   = KEYCODE_DOWN  & ~0x20,
+	KEYCODE_ALT_RIGHT  = KEYCODE_RIGHT & ~0x20,
+	KEYCODE_ALT_LEFT   = KEYCODE_LEFT  & ~0x20,
+
 	KEYCODE_CURSOR_POS = -0x100, /* 0xfff..fff00 */
 	/* How long is the longest ESC sequence we know?
 	 * We want it big enough to be able to contain
@@ -1405,6 +1439,12 @@ typedef struct line_input_t {
 	int cur_history;
 	int max_history; /* must never be <= 0 */
 #  if ENABLE_FEATURE_EDITING_SAVEHISTORY
+	/* meaning of this field depends on FEATURE_EDITING_SAVE_ON_EXIT:
+	 * if !FEATURE_EDITING_SAVE_ON_EXIT: "how many lines are
+	 * in on-disk history"
+	 * if FEATURE_EDITING_SAVE_ON_EXIT: "how many in-memory lines are
+	 * also in on-disk history (and thus need to be skipped on save)"
+	 */
 	unsigned cnt_history_in_file;
 	const char *hist_file;
 #  endif
@@ -1412,13 +1452,12 @@ typedef struct line_input_t {
 # endif
 } line_input_t;
 enum {
-	DO_HISTORY = 1 * (MAX_HISTORY > 0),
-	SAVE_HISTORY = 2 * (MAX_HISTORY > 0) * ENABLE_FEATURE_EDITING_SAVEHISTORY,
-	TAB_COMPLETION = 4 * ENABLE_FEATURE_TAB_COMPLETION,
-	USERNAME_COMPLETION = 8 * ENABLE_FEATURE_USERNAME_COMPLETION,
-	VI_MODE = 0x10 * ENABLE_FEATURE_EDITING_VI,
-	WITH_PATH_LOOKUP = 0x20,
-	FOR_SHELL = DO_HISTORY | SAVE_HISTORY | TAB_COMPLETION | USERNAME_COMPLETION,
+	DO_HISTORY       = 1 * (MAX_HISTORY > 0),
+	TAB_COMPLETION   = 2 * ENABLE_FEATURE_TAB_COMPLETION,
+	USERNAME_COMPLETION = 4 * ENABLE_FEATURE_USERNAME_COMPLETION,
+	VI_MODE          = 8 * ENABLE_FEATURE_EDITING_VI,
+	WITH_PATH_LOOKUP = 0x10,
+	FOR_SHELL        = DO_HISTORY | TAB_COMPLETION | USERNAME_COMPLETION,
 };
 line_input_t *new_line_input_t(int flags) FAST_FUNC;
 /* So far static: void free_line_input_t(line_input_t *n) FAST_FUNC; */
@@ -1430,6 +1469,9 @@ line_input_t *new_line_input_t(int flags) FAST_FUNC;
  * >0 length of input string, including terminating '\n'
  */
 int read_line_input(line_input_t *st, const char *prompt, char *command, int maxsize, int timeout) FAST_FUNC;
+# if ENABLE_FEATURE_EDITING_SAVE_ON_EXIT
+void save_history(line_input_t *st);
+# endif
 #else
 #define MAX_HISTORY 0
 int read_line_input(const char* prompt, char* command, int maxsize) FAST_FUNC;
@@ -1541,13 +1583,6 @@ enum {
 	PSSCAN_NICE     = (1 << 20) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
 	PSSCAN_RUIDGID  = (1 << 21) * ENABLE_FEATURE_PS_ADDITIONAL_COLUMNS,
 	PSSCAN_TASKS	= (1 << 22) * ENABLE_FEATURE_SHOW_THREADS,
-	/* These are all retrieved from proc/NN/stat in one go: */
-	PSSCAN_STAT     = PSSCAN_PPID | PSSCAN_PGID | PSSCAN_SID
-	/**/            | PSSCAN_COMM | PSSCAN_STATE
-	/**/            | PSSCAN_VSZ | PSSCAN_RSS
-	/**/            | PSSCAN_STIME | PSSCAN_UTIME | PSSCAN_START_TIME
-	/**/            | PSSCAN_TTY | PSSCAN_NICE
-	/**/            | PSSCAN_CPU
 };
 //procps_status_t* alloc_procps_scan(void) FAST_FUNC;
 void free_procps_scan(procps_status_t* sp) FAST_FUNC;
@@ -1561,6 +1596,15 @@ int starts_with_cpu(const char *str) FAST_FUNC;
 unsigned get_cpu_count(void) FAST_FUNC;
 
 
+/* Use strict=1 if you process input from untrusted source:
+ * it will return NULL on invalid %xx (bad hex chars)
+ * and str + 1 if decoded char is / or NUL.
+ * In non-strict mode, it always succeeds (returns str),
+ * and also it additionally decoded '+' to space.
+ */
+char *percent_decode_in_place(char *str, int strict) FAST_FUNC;
+
+
 extern const char bb_uuenc_tbl_base64[];
 extern const char bb_uuenc_tbl_std[];
 void bb_uuencode(char *store, const void *s, int length, const char *tbl) FAST_FUNC;
@@ -1569,7 +1613,8 @@ enum {
 	/* Sign-extends to a value which never matches fgetc result: */
 	BASE64_FLAG_NO_STOP_CHAR = 0x80,
 };
-void FAST_FUNC read_base64(FILE *src_stream, FILE *dst_stream, int flags);
+const char *decode_base64(char **pp_dst, const char *src) FAST_FUNC;
+void read_base64(FILE *src_stream, FILE *dst_stream, int flags) FAST_FUNC;
 
 typedef struct md5_ctx_t {
 	uint8_t wbuffer[64]; /* always correctly aligned for uint64_t */

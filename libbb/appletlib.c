@@ -62,7 +62,7 @@ static const char usage_messages[] ALIGN1 = UNPACKED_USAGE;
 #if ENABLE_FEATURE_COMPRESS_USAGE
 
 static const char packed_usage[] ALIGN1 = { PACKED_USAGE };
-# include "archive.h"
+# include "bb_archive.h"
 static const char *unpack_usage_messages(void)
 {
 	char *outbuf = NULL;
@@ -627,7 +627,7 @@ static int busybox_main(char **argv)
 		full_write2_str(bb_banner); /* reuse const string */
 		full_write2_str(" multi-call binary.\n"); /* reuse */
 		full_write2_str(
-			"Copyright (C) 1998-2009 Erik Andersen, Rob Landley, Denys Vlasenko\n"
+			"Copyright (C) 1998-2011 Erik Andersen, Rob Landley, Denys Vlasenko\n"
 			"and others. Licensed under GPLv2.\n"
 			"See source distribution for full notice.\n"
 			"\n"

@@ -97,10 +97,22 @@ CFLAGS += $(strip $(subst ",,$(CONFIG_EXTRA_CFLAGS)))
 #"))
 endif
 
+ifneq ($(CONFIG_CROSS_COMPILER_PREFIX),"arm-linux-androideabi-")
 LDLIBS += m crypt
+else
+# Android libc has no crypt. TODO: make a generic CONFIG_LINK_WITH_CRYPT option?
+LDLIBS += m
+endif
 
 ifeq ($(CONFIG_PAM),y)
-LDLIBS += pam pam_misc
+# libpam uses libpthread, so for static builds busybox must be linked to
+# libpthread. On some platforms that requires an explicit -lpthread, so
+# it should be in LDLIBS. For non-static builds, scripts/trylink will
+# take care of removing -lpthread if possible. (Not bothering to check
+# CONFIG_STATIC because even in a non-static build it could be that the
+# only libpam available is libpam.a, so -lpthread could still be
+# needed.)
+LDLIBS += pam pam_misc pthread
 endif
 
 ifeq ($(CONFIG_SELINUX),y)

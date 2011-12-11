@@ -11,7 +11,7 @@
 //config:config SETSERIAL
 //config:	bool "setserial"
 //config:	default y
-//config:	depends on PLATFORM_LINUX
+//config:	select PLATFORM_LINUX
 //config:	help
 //config:	  Retrieve or set Linux serial port.
 
@@ -214,7 +214,7 @@ struct serial_struct {
 //usage:#define setserial_full_usage "\n\n"
 //usage:	"Request or set Linux serial port information\n"
 //usage:	"\n"
-//usage:	"	-g	Interpret parameters as list of devices for reporting"
+//usage:	"	-g	Interpret parameters as list of devices for reporting\n"
 //usage:	"	-a	Print all available information\n"
 //usage:	"	-b	Print summary information\n"
 //usage:	"	-G	Print in form which can be fed back\n"

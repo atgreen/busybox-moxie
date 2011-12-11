@@ -24,12 +24,18 @@
 
 #include "libbb.h"
 #include <mntent.h>
-#include <sys/swap.h>
+#ifndef __BIONIC__
+# include <sys/swap.h>
+#endif
 
 #if ENABLE_FEATURE_MOUNT_LABEL
 # include "volume_id.h"
 #else
 # define resolve_mount_spec(fsname) ((void)0)
+#endif
+
+#ifndef MNTTYPE_SWAP
+# define MNTTYPE_SWAP "swap"
 #endif
 
 #if ENABLE_FEATURE_SWAPON_PRI
@@ -41,6 +47,7 @@ struct globals {
 #else
 #define g_flags 0
 #endif
+#define INIT_G() do { } while (0)
 
 static int swap_enable_disable(char *device)
 {
@@ -104,10 +111,13 @@ int swap_on_off_main(int argc UNUSED_PARAM, char **argv)
 {
 	int ret;
 
+	INIT_G();
+
 #if !ENABLE_FEATURE_SWAPON_PRI
 	ret = getopt32(argv, "a");
 #else
-	opt_complementary = "p+";
+	if (applet_name[5] == 'n')
+		opt_complementary = "p+";
 	ret = getopt32(argv, (applet_name[5] == 'n') ? "ap:" : "a", &g_flags);
 
 	if (ret & 2) { // -p

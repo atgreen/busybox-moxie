@@ -269,19 +269,6 @@ config FEATURE_FANCY_HEAD
 	help
 	  This enables the head options (-c, -q, and -v).
 
-config HOSTID
-	bool "hostid"
-	default y
-	help
-	  hostid prints the numeric identifier (in hexadecimal) for
-	  the current host.
-
-config ID
-	bool "id"
-	default y
-	help
-	  id displays the current user and group ID names.
-
 config INSTALL
 	bool "install"
 	default y
@@ -730,13 +717,6 @@ config FEATURE_WC_LARGE
 	depends on WC
 	help
 	  Use "unsigned long long" in wc for counter variables.
-
-config WHO
-	bool "who"
-	default y
-	depends on FEATURE_UTMP
-	help
-	  who is used to show who is logged on.
 
 config WHOAMI
 	bool "whoami"

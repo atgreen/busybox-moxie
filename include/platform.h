@@ -116,7 +116,7 @@
 
 /* Make all declarations hidden (-fvisibility flag only affects definitions) */
 /* (don't include system headers after this until corresponding pop!) */
-#if __GNUC_PREREQ(4,1)
+#if __GNUC_PREREQ(4,1) && !defined(__CYGWIN__)
 # define PUSH_AND_SET_FUNCTION_VISIBILITY_TO_HIDDEN _Pragma("GCC visibility push(hidden)")
 # define POP_SAVED_FUNCTION_VISIBILITY              _Pragma("GCC visibility pop")
 #else
@@ -266,6 +266,7 @@ typedef unsigned smalluint;
 #if defined __GLIBC__ \
  || defined __UCLIBC__ \
  || defined __dietlibc__ \
+ || defined __BIONIC__ \
  || defined _NEWLIB_VERSION
 # include <features.h>
 #endif
@@ -329,6 +330,10 @@ typedef unsigned smalluint;
 # endif
 #endif
 
+#if defined(__CYGWIN__)
+# define MAXSYMLINKS SYMLOOP_MAX
+#endif
+
 
 /* ---- Who misses what? ------------------------------------ */
 
@@ -348,14 +353,23 @@ typedef unsigned smalluint;
 #define HAVE_STRCHRNUL 1
 #define HAVE_STRSEP 1
 #define HAVE_STRSIGNAL 1
+#define HAVE_STRVERSCMP 1
 #define HAVE_VASPRINTF 1
+#define HAVE_UNLOCKED_STDIO 1
+#define HAVE_UNLOCKED_LINE_OPS 1
+#define HAVE_GETLINE 1
 #define HAVE_XTABS 1
 #define HAVE_MNTENT_H 1
 #define HAVE_NET_ETHERNET_H 1
 #define HAVE_SYS_STATFS_H 1
 
-#if defined(__GLIBC__) && (__GLIBC__ < 2 || __GLIBC_MINOR__ < 1)
-# undef HAVE_NET_ETHERNET_H
+#if defined(__UCLIBC_MAJOR__)
+# if __UCLIBC_MAJOR__ == 0 \
+  && (   __UCLIBC_MINOR__ < 9 \
+     || (__UCLIBC_MINOR__ == 9 && __UCLIBC_SUBLEVEL__ < 32) \
+     )
+#  undef HAVE_STRVERSCMP
+# endif
 #endif
 
 #if defined(__dietlibc__)
@@ -364,6 +378,7 @@ typedef unsigned smalluint;
 
 #if defined(__WATCOMC__)
 # undef HAVE_DPRINTF
+# undef HAVE_GETLINE
 # undef HAVE_MEMRCHR
 # undef HAVE_MKDTEMP
 # undef HAVE_SETBIT
@@ -372,35 +387,59 @@ typedef unsigned smalluint;
 # undef HAVE_STRCHRNUL
 # undef HAVE_STRSEP
 # undef HAVE_STRSIGNAL
+# undef HAVE_STRVERSCMP
 # undef HAVE_VASPRINTF
+# undef HAVE_UNLOCKED_STDIO
+# undef HAVE_UNLOCKED_LINE_OPS
 # undef HAVE_NET_ETHERNET_H
+#endif
+
+#if defined(__CYGWIN__)
+# undef HAVE_CLEARENV
+# undef HAVE_FDPRINTF
+# undef HAVE_MEMRCHR
+# undef HAVE_PTSNAME_R
+# undef HAVE_STRVERSCMP
+# undef HAVE_UNLOCKED_LINE_OPS
+#endif
+
+/* These BSD-derived OSes share many similarities */
+#if (defined __digital__ && defined __unix__) \
+ || defined __APPLE__ \
+ || defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__
+# undef HAVE_CLEARENV
+# undef HAVE_FDATASYNC
+# undef HAVE_GETLINE
+# undef HAVE_MNTENT_H
+# undef HAVE_PTSNAME_R
+# undef HAVE_SYS_STATFS_H
+# undef HAVE_SIGHANDLER_T
+# undef HAVE_STRVERSCMP
+# undef HAVE_XTABS
+# undef HAVE_DPRINTF
+# undef HAVE_UNLOCKED_STDIO
+# undef HAVE_UNLOCKED_LINE_OPS
 #endif
 
 #if defined(__FreeBSD__)
 # undef HAVE_STRCHRNUL
 #endif
 
-#if (defined __digital__ && defined __unix__) \
- || defined __APPLE__ \
- || defined __FreeBSD__ || defined __OpenBSD__ || defined __NetBSD__
-# undef HAVE_CLEARENV
-# undef HAVE_FDATASYNC
-# undef HAVE_MNTENT_H
-# undef HAVE_PTSNAME_R
-# undef HAVE_SYS_STATFS_H
-# undef HAVE_SIGHANDLER_T
-# undef HAVE_XTABS
-# undef HAVE_DPRINTF
+#if defined(__NetBSD__)
+# define HAVE_GETLINE 1  /* Recent NetBSD versions have getline() */
 #endif
 
 #if defined(__digital__) && defined(__unix__)
 # undef HAVE_STPCPY
 #endif
 
-#if defined(ANDROID)
+#if defined(ANDROID) || defined(__ANDROID__)
 # undef HAVE_DPRINTF
+# undef HAVE_GETLINE
 # undef HAVE_STPCPY
 # undef HAVE_STRCHRNUL
+# undef HAVE_STRVERSCMP
+# undef HAVE_UNLOCKED_LINE_OPS
 # undef HAVE_NET_ETHERNET_H
 #endif
 
@@ -453,6 +492,12 @@ extern char *strsep(char **stringp, const char *delim) FAST_FUNC;
 
 #ifndef HAVE_VASPRINTF
 extern int vasprintf(char **string_ptr, const char *format, va_list p) FAST_FUNC;
+#endif
+
+#ifndef HAVE_GETLINE
+# include <stdio.h> /* for FILE */
+# include <sys/types.h> /* size_t */
+extern ssize_t getline(char **lineptr, size_t *n, FILE *stream) FAST_FUNC;
 #endif
 
 #endif

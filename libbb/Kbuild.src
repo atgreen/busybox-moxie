@@ -64,7 +64,6 @@ lib-y += hash_md5_sha.o
 lib-y += messages.o
 lib-y += mode_string.o
 lib-y += parse_mode.o
-lib-y += parse_config.o
 lib-y += perror_msg.o
 lib-y += perror_nomsg.o
 lib-y += perror_nomsg_and_die.o
@@ -98,7 +97,6 @@ lib-y += strrstr.o
 lib-y += time.o
 lib-y += trim.o
 lib-y += u_signal_names.o
-lib-y += udp_io.o
 lib-y += uuencode.o
 lib-y += vdprintf.o
 lib-y += verror_msg.o
@@ -127,6 +125,15 @@ lib-$(CONFIG_SELINUX) += selinux_common.o
 lib-$(CONFIG_FEATURE_MTAB_SUPPORT) += mtab.o
 lib-$(CONFIG_UNICODE_SUPPORT) += unicode.o
 lib-$(CONFIG_FEATURE_CHECK_NAMES) += die_if_bad_username.o
+
+lib-$(CONFIG_NC) += udp_io.o
+lib-$(CONFIG_DNSD) += udp_io.o
+lib-$(CONFIG_NTPD) += udp_io.o
+lib-$(CONFIG_TFTP) += udp_io.o
+lib-$(CONFIG_TFTPD) += udp_io.o
+lib-$(CONFIG_TCPSVD) += udp_io.o
+lib-$(CONFIG_UDPSVD) += udp_io.o
+lib-$(CONFIG_TRACEROUTE) += udp_io.o
 
 lib-$(CONFIG_LOSETUP) += loop.o
 lib-$(CONFIG_FEATURE_MOUNT_LOOP) += loop.o
@@ -158,6 +165,12 @@ lib-$(CONFIG_RTCWAKE) += rtc.o
 lib-$(CONFIG_IOSTAT) += get_cpu_count.o
 lib-$(CONFIG_MPSTAT) += get_cpu_count.o
 lib-$(CONFIG_POWERTOP) += get_cpu_count.o
+
+lib-$(CONFIG_PING) += inet_cksum.o
+lib-$(CONFIG_TRACEROUTE) += inet_cksum.o
+lib-$(CONFIG_TRACEROUTE6) += inet_cksum.o
+lib-$(CONFIG_UDHCPC) += inet_cksum.o
+lib-$(CONFIG_UDHCPD) += inet_cksum.o
 
 # We shouldn't build xregcomp.c if we don't need it - this ensures we don't
 # require regex.h to be in the include dir even if we don't need it thereby
