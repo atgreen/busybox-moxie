@@ -51,6 +51,20 @@
 #include <termios.h>
 #include <time.h>
 #include <sys/param.h>
+#include <pwd.h>
+#include <grp.h>
+#if ENABLE_FEATURE_SHADOWPASSWDS
+# if !ENABLE_USE_BB_SHADOW
+/* If using busybox's shadow implementation, do not include the shadow.h
+ * header as the toolchain may not provide it at all.
+ */
+#  include <shadow.h>
+# endif
+#endif
+#if defined(ANDROID) || defined(__ANDROID__)
+# define endpwent() ((void)0)
+# define endgrent() ((void)0)
+#endif
 #ifdef HAVE_MNTENT_H
 # include <mntent.h>
 #endif
@@ -79,16 +93,6 @@
 #endif
 #ifdef DMALLOC
 # include <dmalloc.h>
-#endif
-#include <pwd.h>
-#include <grp.h>
-#if ENABLE_FEATURE_SHADOWPASSWDS
-# if !ENABLE_USE_BB_SHADOW
-/* If using busybox's shadow implementation, do not include the shadow.h
- * header as the toolchain may not provide it at all.
- */
-#  include <shadow.h>
-# endif
 #endif
 /* Just in case libc doesn't define some of these... */
 #ifndef _PATH_PASSWD
@@ -314,7 +318,7 @@ extern char *strrstr(const char *haystack, const char *needle) FAST_FUNC;
 
 //TODO: supply a pointer to char[11] buffer (avoid statics)?
 extern const char *bb_mode_string(mode_t mode) FAST_FUNC;
-extern int is_directory(const char *name, int followLinks, struct stat *statBuf) FAST_FUNC;
+extern int is_directory(const char *name, int followLinks) FAST_FUNC;
 enum {	/* DO NOT CHANGE THESE VALUES!  cp.c, mv.c, install.c depend on them. */
 	FILEUTILS_PRESERVE_STATUS = 1 << 0, /* -p */
 	FILEUTILS_DEREFERENCE     = 1 << 1, /* !-d */
@@ -1191,13 +1195,14 @@ enum {
 	PARSE_MIN_DIE   = 0x00100000, // die if < min tokens found
 	// keep a copy of current line
 	PARSE_KEEP_COPY = 0x00200000 * ENABLE_FEATURE_CROND_D,
-//	PARSE_ESCAPE    = 0x00400000, // process escape sequences in tokens
+	PARSE_EOL_COMMENTS = 0x00400000, // comments are recognized even if they aren't the first char
 	// NORMAL is:
 	// * remove leading and trailing delimiters and collapse
 	//   multiple delimiters into one
 	// * warn and continue if less than mintokens delimiters found
 	// * grab everything into last token
-	PARSE_NORMAL    = PARSE_COLLAPSE | PARSE_TRIM | PARSE_GREEDY,
+	// * comments are recognized even if they aren't the first char
+	PARSE_NORMAL    = PARSE_COLLAPSE | PARSE_TRIM | PARSE_GREEDY | PARSE_EOL_COMMENTS,
 };
 typedef struct parser_t {
 	FILE *fp;
